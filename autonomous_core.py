@@ -1,5 +1,5 @@
 
-import os, json, re, sqlite3, base64, random, time, requests, hashlib
+import os, json, re, sqlite3, base64, random, time, requests, hashlib, gc
 from pathlib import Path
 from datetime import datetime, date
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -219,30 +219,53 @@ MANDATORY:
 """
 
 def generate_one(batch_id, idx, slot, trend):
-    c=openai_client()
-    model=os.getenv("OPENAI_IMAGE_MODEL","gpt-image-2")
-    quality=os.getenv("OPENAI_IMAGE_QUALITY","low")
-    prompt=concept_prompt(slot,trend,idx)
-    r=c.images.generate(model=model,prompt=prompt,size="1024x1024",quality=quality)
-    item=r.data[0]
-    if getattr(item,"b64_json",None):
-        raw=base64.b64decode(item.b64_json)
-    elif getattr(item,"url",None):
-        rr=requests.get(item.url,timeout=120); rr.raise_for_status(); raw=rr.content
-    else:
-        raise RuntimeError("No image returned.")
-    fn=f"batch{batch_id:06d}_{idx:02d}_{slot['lane'].replace(' ','_')}_{slot['category'].replace('/','-').replace(' ','_')}.png"
-    path=CONCEPT_DIR/fn
-    path.write_bytes(raw)
-    score=max(50,min(99,int(trend.get("commercial_score",75))+random.randint(-3,3)))
-    con=get_db()
-    con.execute("""INSERT INTO concepts(batch_id,created_at,lane,category,weight_band,trend_name,title,
-                 commercial_score,image_path,prompt,source)
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                (batch_id,datetime.now().isoformat(timespec="seconds"),slot["lane"],slot["category"],
-                 slot["weight_band"],trend.get("name","Trend-led"),f"Design {idx:02d}",score,str(path),prompt,model))
-    con.commit();con.close()
-    return {"idx":idx,"path":str(path),"score":score,"slot":slot,"trend":trend.get("name","")}
+    """Generate one image and aggressively release the large API/base64 objects afterwards."""
+    c = None; r = None; item = None; raw = None
+    try:
+        c=openai_client()
+        model=os.getenv("OPENAI_IMAGE_MODEL","gpt-image-2")
+        quality=os.getenv("OPENAI_IMAGE_QUALITY","low")
+        prompt=concept_prompt(slot,trend,idx)
+        r=c.images.generate(model=model,prompt=prompt,size="1024x1024",quality=quality)
+        item=r.data[0]
+        if getattr(item,"b64_json",None):
+            raw=base64.b64decode(item.b64_json)
+        elif getattr(item,"url",None):
+            with requests.get(item.url,timeout=120,stream=True) as rr:
+                rr.raise_for_status()
+                raw=rr.content
+        else:
+            raise RuntimeError("No image returned.")
+        fn=f"batch{batch_id:06d}_{idx:02d}_{slot['lane'].replace(' ','_')}_{slot['category'].replace('/','-').replace(' ','_')}.png"
+        path=CONCEPT_DIR/fn
+        path.write_bytes(raw)
+        score=max(50,min(99,int(trend.get("commercial_score",75))+random.randint(-3,3)))
+        con=get_db()
+        try:
+            con.execute("""INSERT INTO concepts(batch_id,created_at,lane,category,weight_band,trend_name,title,
+                         commercial_score,image_path,prompt,source)
+                         VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                        (batch_id,datetime.now().isoformat(timespec="seconds"),slot["lane"],slot["category"],
+                         slot["weight_band"],trend.get("name","Trend-led"),f"Design {idx:02d}",score,str(path),prompt,model))
+            con.commit()
+        finally:
+            con.close()
+        return {"idx":idx,"path":str(path),"score":score,"slot":slot,"trend":trend.get("name","")}
+    finally:
+        # Image API responses can contain multi-megabyte base64 strings. Explicitly drop them
+        # after every design so a 100-design batch does not grow until Render's RAM limit.
+        raw = item = r = c = None
+        gc.collect()
+
+def current_rss_mb():
+    """Linux/Render current resident memory, for lightweight worker diagnostics."""
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return round(int(line.split()[1]) / 1024, 1)
+    except Exception:
+        pass
+    return None
 
 def app_public_url():
     return os.getenv("APP_PUBLIC_URL","").strip()
@@ -296,15 +319,46 @@ def create_batch():
         trend=choose_trend(pool,i-1)
         jobs.append((i,slot,trend))
 
-    max_workers=max(1,min(int(os.getenv("GENERATION_CONCURRENCY","4")),5))
+    # 512 MB Render instances are much more stable with one image generation in memory at a time.
+    # Set GENERATION_CONCURRENCY higher only after upgrading RAM and verifying metrics.
+    max_workers=max(1,min(int(os.getenv("GENERATION_CONCURRENCY","1")),2))
+    max_attempts=max(1,min(int(os.getenv("GENERATION_MAX_ATTEMPTS","3")),5))
     results=[]; errors=[]
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futs={ex.submit(generate_one,batch_id,i,slot,trend):(i,slot) for i,slot,trend in jobs}
-        for fut in as_completed(futs):
-            i,slot=futs[fut]
-            try: results.append(fut.result())
-            except Exception as e: errors.append({"idx":i,"slot":slot,"error":str(e)})
 
+    def run_with_retry(i, slot, trend):
+        last_error=None
+        for attempt in range(1,max_attempts+1):
+            try:
+                out=generate_one(batch_id,i,slot,trend)
+                rss=current_rss_mb()
+                print(f"[Trend2Sketch batch {batch_id}] design {i:03d}/100 OK attempt={attempt}" +
+                      (f" rss={rss}MB" if rss is not None else ""), flush=True)
+                return out
+            except Exception as e:
+                last_error=e
+                print(f"[Trend2Sketch batch {batch_id}] design {i:03d}/100 FAILED attempt={attempt}: {type(e).__name__}: {e}", flush=True)
+                gc.collect()
+                if attempt < max_attempts:
+                    time.sleep(min(20, 2 ** attempt))
+        raise last_error
+
+    if max_workers == 1:
+        for i,slot,trend in jobs:
+            try:
+                results.append(run_with_retry(i,slot,trend))
+            except Exception as e:
+                errors.append({"idx":i,"slot":slot,"error":f"{type(e).__name__}: {e}"})
+            gc.collect()
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs={ex.submit(run_with_retry,i,slot,trend):(i,slot) for i,slot,trend in jobs}
+            for fut in as_completed(futs):
+                i,slot=futs[fut]
+                try: results.append(fut.result())
+                except Exception as e: errors.append({"idx":i,"slot":slot,"error":f"{type(e).__name__}: {e}"})
+                gc.collect()
+
+    results.sort(key=lambda x:x["idx"])
     email_status=send_email_digest(batch_id,results,trends)
     con=get_db()
     con.execute("""UPDATE batches SET finished_at=?,status=?,generated_count=?,failed_count=?,email_status=?,note=?
@@ -315,3 +369,4 @@ def create_batch():
                  json.dumps(errors,ensure_ascii=False)[:10000] if errors else "",batch_id))
     con.commit();con.close()
     return batch_id,results,errors,email_status
+

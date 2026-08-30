@@ -28,6 +28,9 @@ def main():
             try:
                 batch_id,results,errors,email_status=create_batch()
                 log(f"Batch #{batch_id}: {len(results)} generated, {len(errors)} failed. {email_status}")
+                if errors:
+                    for err in errors[:10]:
+                        log(f"Failure design {err.get('idx')}: {err.get('error')}")
             except Exception:
                 log("Batch failed:\n"+traceback.format_exc())
             elapsed=time.time()-started

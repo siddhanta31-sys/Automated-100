@@ -27,7 +27,9 @@ services:
       - key: AUTO_RUN_ON_START
         value: "true"
       - key: GENERATION_CONCURRENCY
-        value: "4"
+        value: "1"
+      - key: GENERATION_MAX_ATTEMPTS
+        value: "3"
       - key: SEND_TO_EMAIL
         sync: false
       - key: RESEND_API_KEY

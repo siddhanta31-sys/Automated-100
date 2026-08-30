@@ -133,12 +133,13 @@ with tabs[4]:
     st.markdown("### Autonomous engine")
     st.code("""AUTO_INTERVAL_MINUTES=30
 AUTO_RUN_ON_START=true
-GENERATION_CONCURRENCY=4
+GENERATION_CONCURRENCY=1
+GENERATION_MAX_ATTEMPTS=3
 OPENAI_TEXT_MODEL=gpt-5.6-luna
 OPENAI_IMAGE_MODEL=gpt-image-2
 OPENAI_IMAGE_QUALITY=low""")
     st.markdown("### Email delivery")
-    st.write("The email contains a digest of the strongest concepts and a link to all 50 designs in this app.")
+    st.write("The email contains a digest of the strongest concepts and a link to all 100 designs in this app.")
     st.code("""SEND_TO_EMAIL=you@example.com
 RESEND_API_KEY=re_...
 SEND_FROM_EMAIL=Trend2Sketch <designs@your-verified-domain.com>
