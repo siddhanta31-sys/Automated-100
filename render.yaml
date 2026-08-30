@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: trend2sketch-autonomous
+    runtime: docker
+    plan: starter
+    autoDeploy: true
+    healthCheckPath: /_stcore/health
+    disk:
+      name: trend2sketch-data
+      mountPath: /var/data/trend2sketch
+      sizeGB: 10
+    envVars:
+      - key: TREND2SKETCH_DATA_DIR
+        value: /var/data/trend2sketch
+      - key: APP_PASSWORD
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_TEXT_MODEL
+        value: gpt-5.6-luna
+      - key: OPENAI_IMAGE_MODEL
+        value: gpt-image-2
+      - key: OPENAI_IMAGE_QUALITY
+        value: low
+      - key: AUTO_INTERVAL_MINUTES
+        value: "30"
+      - key: AUTO_RUN_ON_START
+        value: "true"
+      - key: GENERATION_CONCURRENCY
+        value: "4"
+      - key: SEND_TO_EMAIL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: SEND_FROM_EMAIL
+        sync: false
+      - key: APP_PUBLIC_URL
+        sync: false
