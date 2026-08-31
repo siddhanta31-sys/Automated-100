@@ -44,9 +44,15 @@ def _fail_cycle(cycle_id, stage, exc):
     print(tb, flush=True)
 
 
-def run_cycle():
+def run_cycle(manual=False):
     init_db(); cleanup_old_images()
     cycle_id=create_cycle()
+    quality_threshold=max(75,min(100,get_int_setting('quality_threshold',DISPLAY_THRESHOLD)))
+    render_cap=max(1,min(100,get_int_setting('render_cap',MAX_RENDER_PER_CYCLE)))
+    if not manual and not get_bool_setting('auto_enabled',True):
+        update_cycle(cycle_id,status='paused',stage='automation_paused',finished_at=now_iso(),note='Autonomous cycles are paused from Live Studio Controls.')
+        _log('autonomous generation paused by live setting', cycle_id, 'automation_paused')
+        return cycle_id
     stage='startup'
     _log('cycle started', cycle_id, stage)
     try:
@@ -98,8 +104,8 @@ def run_cycle():
             if one('SELECT id FROM designs WHERE fingerprint=?',(fp,)): continue
             shortlist.append(c)
             existing.append(' '.join([c.get('title',''),c.get('description',''),c.get('concept_family','')]))
-            if len(shortlist)>=MAX_RENDER_PER_CYCLE: break
-        _log(f'ranked shortlist={len(shortlist)}; pre-render floor={PRE_RENDER_MIN_SCORE}; final visibility gate={DISPLAY_THRESHOLD}+', cycle_id, 'shortlist')
+            if len(shortlist)>=render_cap: break
+        _log(f'ranked shortlist={len(shortlist)}; render cap={render_cap}; pre-render floor={PRE_RENDER_MIN_SCORE}; final visibility gate={quality_threshold}+', cycle_id, 'shortlist')
 
         remaining=max(0, DAILY_API_BUDGET_USD-today_spend())
         affordable=int(remaining//max(EST_IMAGE_COST_USD,0.0001))
@@ -114,7 +120,7 @@ def run_cycle():
             update_cycle(cycle_id,status='paused',stage='resource_guard',finished_at=now_iso(),note=str(system_health()))
             return cycle_id
         stage='rendering'
-        update_cycle(cycle_id,stage=stage,note=f'Rendering top {len(shortlist)} ranked concepts with concurrency {concurrency}; final 95+ gate applies after visual scoring')
+        update_cycle(cycle_id,stage=stage,note=f'Rendering top {len(shortlist)} ranked concepts with concurrency {concurrency}; live final gate is {quality_threshold}+')
         rendered=visible=rejected=failed=0
 
         def job(pair):
@@ -135,7 +141,7 @@ def run_cycle():
                 c=futs[fut][1]
                 try:
                     c,path,vscore,vreason,redesign,final=fut.result(); rendered+=1
-                    vis=1 if final>=DISPLAY_THRESHOLD else 0
+                    vis=1 if final>=quality_threshold else 0
                     if vis: visible+=1
                     else: rejected+=1
                     execute('''INSERT OR IGNORE INTO designs(cycle_id,created_at,lane,category,concept_family,title,description,materials,target_weight,region_signal,rationale,pre_score,visual_score,final_score,image_path,visible,fingerprint,status,error)

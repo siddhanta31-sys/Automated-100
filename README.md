@@ -1,62 +1,28 @@
-# Trend2Sketch Auto100 — iPad Autonomous Edition
+# Trend2Sketch Studio
 
-This edition generates **100 original jewellery sketches every 30 minutes**:
+A next-generation autonomous jewellery concept platform focused on dynamic concept discovery rather than a fixed category matrix.
 
-- **50 Diamond jewellery designs**
-- **50 South Indian gemstone jewellery designs**
+## What changed from Auto100
+- Researches and discovers jewellery families/sub-families itself.
+- Explores ~300 concepts per cycle by default.
+- Strict 1–100 design intelligence score.
+- Only designs scoring 95+ after concept + visual checks are visible.
+- Novelty filter reduces repetitive concepts.
+- Cost guard pauses generation at the configured daily estimate budget.
+- RAM/disk guard adapts generation concurrency.
+- Worker supervisor automatically restarts the background worker after a crash.
+- SQLite WAL + persistent disk protect state across app restarts.
+- Old non-favourite renders can be archived after a retention period.
 
-No daily user input is required.
+## Important
+The 95+ score is an internal design-quality/commercial-potential score, not a guarantee of sales.
+This package generates design concepts/images; it does not yet create production-ready 3DM geometry. CAD/3DM is a separate future engine and should be validated before manufacturing.
 
-## Every batch covers all 10 categories in BOTH lanes
+## Render deployment
+1. Create a new private GitHub repo or branch and upload all files to the repo root.
+2. Create a Render Blueprint from `render.yaml`.
+3. Set `APP_PASSWORD` and `OPENAI_API_KEY` in Render; never commit API keys.
+4. Deploy.
+5. After deployment, optionally set `APP_PUBLIC_URL` to the Render URL.
 
-Each category gets 5 weight bands, so:
-
-10 categories × 5 weight bands = 50 Diamond designs  
-10 categories × 5 weight bands = 50 South Indian gemstone designs  
-**Total = 100 designs per batch**
-
-### Categories
-1. Bangle
-2. Earring
-3. Jhumka
-4. Chandbali
-5. Ring
-6. Short Necklace
-7. Long Necklace
-8. Haram
-9. Bridal Set
-10. Vaddanam
-
-## Autonomous workflow
-Every 30 minutes:
-1. Researches current public catalogue signals from Tanishq, Malabar Gold & Diamonds, Kalyan Jewellers and Joyalukkas.
-2. Separates Diamond trends from South Indian gemstone trends.
-3. Ranks trends by inferred commercial potential.
-4. Generates 100 original sketches across the full category/weight matrix.
-5. Saves all designs in the persistent library.
-6. Optionally emails a batch summary and a link to the app.
-
-## Required Render variables
-- APP_PASSWORD
-- OPENAI_API_KEY
-
-## Recommended
-- AUTO_INTERVAL_MINUTES=30
-- OPENAI_TEXT_MODEL=gpt-5.6-luna
-- OPENAI_IMAGE_MODEL=gpt-image-2
-- OPENAI_IMAGE_QUALITY=low
-- GENERATION_CONCURRENCY=4
-
-## Optional email delivery
-- SEND_TO_EMAIL
-- RESEND_API_KEY
-- SEND_FROM_EMAIL
-- APP_PUBLIC_URL
-
-## Cost warning
-100 sketches every 30 minutes = **4,800 generated images per day** if it runs continuously.
-Start on low image quality and monitor API costs carefully.
-
-## Commercial scoring
-The app estimates likely commercial potential from current public catalogue signals.
-It cannot guarantee a design will become a fast seller. Accuracy will improve significantly once your own sales/order data is connected.
+Recommended first test: keep defaults for 24 hours before increasing render volume or budget.

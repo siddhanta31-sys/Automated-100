@@ -66,6 +66,11 @@ def init_db():
       summary TEXT,
       source_note TEXT
     );
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS spend_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       created_at TEXT NOT NULL,
@@ -104,3 +109,19 @@ def log_spend(cycle_id, kind, usd, note=''):
 def today_spend():
     row = one("SELECT COALESCE(SUM(estimated_usd),0) AS total FROM spend_log WHERE date(created_at)=date('now')")
     return float(row['total'] if row else 0)
+
+def get_setting(key, default=None):
+    row = one('SELECT value FROM app_settings WHERE key=?', (key,))
+    return row['value'] if row else default
+
+def set_setting(key, value):
+    execute('INSERT INTO app_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at',
+            (key, str(value), now_iso()))
+
+def get_int_setting(key, default):
+    try: return int(float(get_setting(key, default)))
+    except Exception: return int(default)
+
+def get_bool_setting(key, default):
+    raw = str(get_setting(key, '1' if default else '0')).strip().lower()
+    return raw in ('1','true','yes','on')
