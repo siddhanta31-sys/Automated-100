@@ -1,0 +1,109 @@
+import os, time, traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
+from config import *
+from db import *
+from intelligence import research_market, generate_concepts, score_concepts, fingerprint, jaccard
+from generator import render_design, visual_score
+from safety import adaptive_concurrency, system_health
+
+
+def _existing_texts(limit=1500):
+    rows=query('SELECT title,description,concept_family FROM designs ORDER BY id DESC LIMIT ?', (limit,))
+    return [' '.join([r.get('title') or '',r.get('description') or '',r.get('concept_family') or '']) for r in rows]
+
+def _novel(item, texts, threshold=0.72):
+    text=' '.join(str(item.get(k,'')) for k in ('title','description','concept_family'))
+    return all(jaccard(text,t) < threshold for t in texts[-1200:])
+
+def cleanup_old_images():
+    cutoff=datetime.now(timezone.utc)-timedelta(days=RETENTION_DAYS)
+    rows=query('SELECT id,image_path,created_at,favorite FROM designs WHERE image_path IS NOT NULL AND favorite=0')
+    for r in rows:
+        try:
+            dt=datetime.fromisoformat(r['created_at'])
+            if dt < cutoff and os.path.exists(r['image_path']):
+                os.remove(r['image_path'])
+                execute('UPDATE designs SET image_path=NULL,status=? WHERE id=?',('archived',r['id']))
+        except Exception: pass
+
+def run_cycle():
+    init_db(); cleanup_old_images()
+    cycle_id=create_cycle()
+    try:
+        health=system_health()
+        if not health['ok']:
+            update_cycle(cycle_id,status='paused',stage='resource_guard',finished_at=now_iso(),note=str(health))
+            return cycle_id
+        spend=today_spend()
+        if spend + EST_TEXT_CYCLE_COST_USD >= DAILY_API_BUDGET_USD:
+            update_cycle(cycle_id,status='paused',stage='budget_guard',finished_at=now_iso(),note=f'Daily budget reached: ${spend:.2f}')
+            return cycle_id
+
+        update_cycle(cycle_id,stage='research')
+        research=research_market()
+        execute('INSERT INTO research_snapshots(created_at,summary,source_note) VALUES(?,?,?)',(now_iso(),str(research),'Live web research where available; public signals only.'))
+        log_spend(cycle_id,'research_and_concepts',EST_TEXT_CYCLE_COST_USD,'configured estimate')
+
+        update_cycle(cycle_id,stage='concept_discovery')
+        concepts=generate_concepts(research,CONCEPT_POOL_SIZE)
+        update_cycle(cycle_id,concepts_discovered=len(concepts),stage='scoring')
+        scored=score_concepts(concepts)
+        update_cycle(cycle_id,candidates_scored=len(scored))
+
+        existing=_existing_texts(); shortlist=[]
+        for c in sorted(scored,key=lambda x:x.get('pre_score',0),reverse=True):
+            if c.get('pre_score',0) < DISPLAY_THRESHOLD: continue
+            if not _novel(c,existing): continue
+            fp=fingerprint(c)
+            if one('SELECT id FROM designs WHERE fingerprint=?',(fp,)): continue
+            shortlist.append(c)
+            existing.append(' '.join([c.get('title',''),c.get('description',''),c.get('concept_family','')]))
+            if len(shortlist)>=MAX_RENDER_PER_CYCLE: break
+
+        # Budget-limited render count
+        remaining=max(0, DAILY_API_BUDGET_USD-today_spend())
+        affordable=int(remaining//max(EST_IMAGE_COST_USD,0.0001))
+        shortlist=shortlist[:affordable]
+        if not shortlist:
+            update_cycle(cycle_id,status='completed',stage='complete',finished_at=now_iso(),note='No 95+ novel concepts available within budget.')
+            return cycle_id
+
+        concurrency=adaptive_concurrency()
+        if concurrency<=0:
+            update_cycle(cycle_id,status='paused',stage='resource_guard',finished_at=now_iso(),note=str(system_health()))
+            return cycle_id
+        update_cycle(cycle_id,stage='rendering')
+        rendered=visible=rejected=failed=0
+
+        def job(pair):
+            idx,c=pair
+            path=render_design(c,cycle_id,idx)
+            vscore,vreason,redesign=visual_score(c,path)
+            # Both concept quality and rendered quality matter; strict gate uses the lower score.
+            final=min(float(c.get('pre_score',0)), float(vscore))
+            return c,path,vscore,vreason,redesign,final
+
+        with ThreadPoolExecutor(max_workers=concurrency) as ex:
+            futs={ex.submit(job,p):p for p in enumerate(shortlist,1)}
+            for fut in as_completed(futs):
+                c=futs[fut][1]
+                try:
+                    c,path,vscore,vreason,redesign,final=fut.result(); rendered+=1
+                    vis=1 if final>=DISPLAY_THRESHOLD else 0
+                    if vis: visible+=1
+                    else: rejected+=1
+                    execute('''INSERT OR IGNORE INTO designs(cycle_id,created_at,lane,category,concept_family,title,description,materials,target_weight,region_signal,rationale,pre_score,visual_score,final_score,image_path,visible,fingerprint,status,error)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
+                        cycle_id,now_iso(),c.get('lane'),c.get('category'),c.get('concept_family'),c.get('title'),c.get('description'),c.get('materials'),c.get('target_weight'),c.get('region_signal'),
+                        (c.get('score_reason','')+' | Visual: '+vreason),c.get('pre_score'),vscore,final,path,vis,fingerprint(c),'visible' if vis else 'rejected',redesign if not vis else None))
+                    log_spend(cycle_id,'image',EST_IMAGE_COST_USD,'configured estimate')
+                    update_cycle(cycle_id,rendered=rendered,visible=visible,rejected=rejected,failed=failed,estimated_cost_usd=EST_TEXT_CYCLE_COST_USD+rendered*EST_IMAGE_COST_USD)
+                except Exception as e:
+                    failed+=1
+                    update_cycle(cycle_id,failed=failed,note=str(e)[:500])
+        update_cycle(cycle_id,status='completed',stage='complete',finished_at=now_iso(),rendered=rendered,visible=visible,rejected=rejected,failed=failed)
+        return cycle_id
+    except Exception as e:
+        update_cycle(cycle_id,status='failed',stage='failed',finished_at=now_iso(),note=(str(e)+'\n'+traceback.format_exc())[:3000])
+        return cycle_id

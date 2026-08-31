@@ -1,6 +1,7 @@
-FROM python:3.12-slim
+FROM python:3.11-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
-COPY . /app
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-ENV PYTHONUNBUFFERED=1
-CMD ["sh","-c","python worker.py & streamlit run app.py --server.address=0.0.0.0 --server.port=${PORT:-10000}"]
+COPY . .
+CMD python supervisor.py & streamlit run app.py --server.address 0.0.0.0 --server.port ${PORT:-10000} --server.headless true
