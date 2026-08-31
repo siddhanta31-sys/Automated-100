@@ -1,7 +1,7 @@
-import os
+import os, json
 import streamlit as st
 from config import *
-from db import init_db, query, one, execute, today_spend, get_int_setting, get_bool_setting, set_setting
+from db import init_db, query, one, execute, today_spend, get_setting, get_int_setting, get_bool_setting, set_setting
 from safety import system_health
 from pipeline import run_cycle
 
@@ -21,6 +21,16 @@ if APP_PASSWORD:
 quality_threshold = max(75, min(100, get_int_setting('quality_threshold', DISPLAY_THRESHOLD)))
 render_cap = max(1, min(100, get_int_setting('render_cap', MAX_RENDER_PER_CYCLE)))
 auto_enabled = get_bool_setting('auto_enabled', True)
+try:
+    selected_categories = json.loads(get_setting('selected_categories','[]') or '[]')
+    if not isinstance(selected_categories,list): selected_categories=[]
+except Exception:
+    selected_categories=[]
+try:
+    selected_lanes = json.loads(get_setting('selected_lanes','[\"Diamond\", \"South Indian Gemstone\"]') or '[]')
+    if not isinstance(selected_lanes,list) or not selected_lanes: selected_lanes=['Diamond','South Indian Gemstone']
+except Exception:
+    selected_lanes=['Diamond','South Indian Gemstone']
 
 st.title('💎 Trend2Sketch Advanced Studio')
 st.caption('Autonomous jewellery intelligence • Dynamic South Indian + Diamond discovery • Rank → Render → Visually score → Filter')
@@ -39,6 +49,32 @@ with st.expander('🎛️ Live Studio Controls — no redeployment needed', expa
         execute('UPDATE designs SET visible=CASE WHEN final_score>=? THEN 1 ELSE 0 END WHERE final_score IS NOT NULL',(new_threshold,))
         st.success('Saved instantly. These settings persist after closing the browser and after normal app restarts.')
         quality_threshold,render_cap,auto_enabled=new_threshold,new_cap,new_auto
+
+    st.markdown('**Product Development Selector**')
+    st.caption('Choose exactly which jewellery product categories the AI should develop. Select several at once. These choices apply to both manual and autonomous cycles.')
+    lane_choice=st.multiselect('Design lanes', ['Diamond','South Indian Gemstone'], default=selected_lanes, help='Select one or both lanes.')
+    preset_name=st.selectbox('Category quick select', ['Custom selection'] + list(CATEGORY_PRESETS.keys()), index=0)
+    default_for_widget = selected_categories
+    if preset_name != 'Custom selection':
+        default_for_widget = CATEGORY_PRESETS[preset_name]
+    category_choice=st.multiselect('Product categories to develop', PRODUCT_CATEGORIES, default=[c for c in default_for_widget if c in PRODUCT_CATEGORIES], help='Leave empty for dynamic auto-discovery across any jewellery category.')
+    custom_text=st.text_input('Add custom product categories (optional)', value=get_setting('custom_categories',''), placeholder='Example: Ear cuff, Convertible necklace, Detachable pendant')
+    custom_categories=[x.strip() for x in custom_text.split(',') if x.strip()]
+    effective_categories=[]
+    for c in category_choice + custom_categories:
+        if c not in effective_categories: effective_categories.append(c)
+    valid_lanes=lane_choice or ['Diamond','South Indian Gemstone']
+    selection_changed=(effective_categories != selected_categories) or (valid_lanes != selected_lanes) or (custom_text != get_setting('custom_categories',''))
+    if selection_changed:
+        set_setting('selected_categories',json.dumps(effective_categories))
+        set_setting('selected_lanes',json.dumps(valid_lanes))
+        set_setting('custom_categories',custom_text)
+        selected_categories,selected_lanes=effective_categories,valid_lanes
+        st.success('Product development selection saved. The next cycle will use these categories automatically.')
+    if effective_categories:
+        st.info('Next cycles will develop only: ' + ' • '.join(effective_categories))
+    else:
+        st.info('Category mode: AUTO-DISCOVER — the research engine may choose any promising jewellery product category.')
 
     preset_cols=st.columns(3)
     if preset_cols[0].button('🧪 Trial preset: 75 / 10'):
@@ -79,6 +115,7 @@ with st.expander('System health', expanded=False):
     c[2].metric('Disk free', f"{h['disk_free_gb']:.1f} GB")
     c[3].metric('Health', 'OK' if h['ok'] else 'GUARD ACTIVE')
     st.write(f'Automatic interval: {AUTO_INTERVAL_MINUTES} min • Research pool: {CONCEPT_POOL_SIZE} • Current render cap: {render_cap} • Pre-render floor: {PRE_RENDER_MIN_SCORE:.0f} • Current acceptance threshold: {quality_threshold} • Autonomous: {"ON" if auto_enabled else "PAUSED"}')
+    st.write('Active lanes: ' + ', '.join(selected_lanes) + ' • Categories: ' + (', '.join(selected_categories) if selected_categories else 'AUTO-DISCOVER'))
 
 if st.button('Generate one trial cycle now', type='primary'):
     with st.spinner('Running research, concept discovery, scoring and rendering with your current live controls...'):

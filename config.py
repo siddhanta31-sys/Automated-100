@@ -38,3 +38,45 @@ RESEARCH_DOMAINS = [
     'kalyanjewellers.net',
     'joyalukkas.in',
 ]
+
+
+# Live-selectable product categories. These are defaults for the UI only; users can also add custom categories.
+PRODUCT_CATEGORIES = [
+    'Choker',
+    'Short Necklace',
+    'Long Necklace / Haram',
+    'Bridal Necklace',
+    'Pendant',
+    'Chain',
+    'Mangalsutra',
+    'Stud Earrings',
+    'Drop Earrings',
+    'Jhumka',
+    'Chandbali',
+    'Hoops',
+    'Ring',
+    'Cocktail Ring',
+    'Bangle',
+    'Kada',
+    'Bracelet',
+    'Vaddanam / Waist Belt',
+    'Vanki / Armlet',
+    'Maang Tikka / Nethi Chutti',
+    'Matha Patti',
+    'Nose Ring / Nath',
+    'Anklet',
+    'Toe Ring',
+    'Brooch',
+    'Hair Ornament / Jada Billa',
+    'Temple Jewellery Set',
+    'Bridal Set',
+]
+
+CATEGORY_PRESETS = {
+    'All categories': PRODUCT_CATEGORIES,
+    'Neckwear': ['Choker','Short Necklace','Long Necklace / Haram','Bridal Necklace','Pendant','Chain','Mangalsutra'],
+    'Earrings': ['Stud Earrings','Drop Earrings','Jhumka','Chandbali','Hoops'],
+    'Hand jewellery': ['Ring','Cocktail Ring','Bangle','Kada','Bracelet','Vanki / Armlet'],
+    'South Indian bridal': ['Long Necklace / Haram','Bridal Necklace','Jhumka','Vaddanam / Waist Belt','Vanki / Armlet','Maang Tikka / Nethi Chutti','Hair Ornament / Jada Billa','Temple Jewellery Set','Bridal Set'],
+    'Diamond everyday': ['Choker','Short Necklace','Pendant','Chain','Stud Earrings','Drop Earrings','Hoops','Ring','Bracelet','Mangalsutra'],
+}

@@ -26,3 +26,6 @@ This package generates design concepts/images; it does not yet create production
 5. After deployment, optionally set `APP_PUBLIC_URL` to the Render URL.
 
 Recommended first test: keep defaults for 24 hours before increasing render volume or budget.
+
+## Live Product Development Selector
+The Studio now includes persistent multi-select controls for design lanes and product categories. Choose one or many categories, use quick presets, or add custom categories without editing code or redeploying. The worker reads the saved selection at the start of every autonomous or manual cycle and constrains research/concept generation accordingly. Leaving the category selection empty enables dynamic auto-discovery.

@@ -1,4 +1,4 @@
-import os, time, traceback
+import os, time, traceback, json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from config import *
@@ -49,6 +49,16 @@ def run_cycle(manual=False):
     cycle_id=create_cycle()
     quality_threshold=max(75,min(100,get_int_setting('quality_threshold',DISPLAY_THRESHOLD)))
     render_cap=max(1,min(100,get_int_setting('render_cap',MAX_RENDER_PER_CYCLE)))
+    try:
+        selected_categories=json.loads(get_setting('selected_categories','[]') or '[]')
+        if not isinstance(selected_categories,list): selected_categories=[]
+    except Exception:
+        selected_categories=[]
+    try:
+        selected_lanes=json.loads(get_setting('selected_lanes','[\"Diamond\", \"South Indian Gemstone\"]') or '[]')
+        if not isinstance(selected_lanes,list) or not selected_lanes: selected_lanes=['Diamond','South Indian Gemstone']
+    except Exception:
+        selected_lanes=['Diamond','South Indian Gemstone']
     if not manual and not get_bool_setting('auto_enabled',True):
         update_cycle(cycle_id,status='paused',stage='automation_paused',finished_at=now_iso(),note='Autonomous cycles are paused from Live Studio Controls.')
         _log('autonomous generation paused by live setting', cycle_id, 'automation_paused')
@@ -76,15 +86,15 @@ def run_cycle(manual=False):
         stage='research'
         update_cycle(cycle_id,stage=stage,note='Research started')
         _log(f'calling text model {TEXT_MODEL} with web research', cycle_id, stage)
-        research=research_market()
+        research=research_market(selected_categories=selected_categories, selected_lanes=selected_lanes)
         _log(f'research returned keys={list(research.keys()) if isinstance(research,dict) else type(research).__name__}', cycle_id, stage)
         execute('INSERT INTO research_snapshots(created_at,summary,source_note) VALUES(?,?,?)',(now_iso(),str(research),'Live web research where available; public signals only.'))
         log_spend(cycle_id,'research_and_concepts',EST_TEXT_CYCLE_COST_USD,'configured estimate')
 
         stage='concept_discovery'
         update_cycle(cycle_id,stage=stage,note='Generating concept pool')
-        _log(f'generating {CONCEPT_POOL_SIZE} concepts', cycle_id, stage)
-        concepts=generate_concepts(research,CONCEPT_POOL_SIZE)
+        _log(f'generating {CONCEPT_POOL_SIZE} concepts for categories={selected_categories or ["AUTO"]}, lanes={selected_lanes}', cycle_id, stage)
+        concepts=generate_concepts(research,CONCEPT_POOL_SIZE, selected_categories=selected_categories, selected_lanes=selected_lanes)
         _log(f'generated {len(concepts)} concepts', cycle_id, stage)
         update_cycle(cycle_id,concepts_discovered=len(concepts),stage='scoring',note='Concept discovery completed')
 

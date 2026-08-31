@@ -34,11 +34,17 @@ def _json_from_text(text):
                 except Exception: pass
         raise ValueError(f'Model response was not valid JSON. First 500 chars: {text[:500]}')
 
-def research_market():
+def research_market(selected_categories=None, selected_lanes=None):
     _require_client()
     domains = ', '.join(RESEARCH_DOMAINS)
+    selected_categories = selected_categories or []
+    selected_lanes = selected_lanes or ['Diamond','South Indian Gemstone']
+    category_instruction = ('Focus product development ONLY on these selected product categories: ' + ', '.join(selected_categories) + '.') if selected_categories else 'Product categories are open-ended; discover promising categories dynamically.'
+    lane_instruction = 'Selected design lanes: ' + ', '.join(selected_lanes) + '.'
     prompt = f'''You are the autonomous jewellery research director for an Indian jewellery manufacturer.
 Research current PUBLIC catalogue and trend signals from the web, especially {domains}, but do not copy any specific branded product.
+{lane_instruction}
+{category_instruction}
 Also use broad public knowledge of Indian jewellery traditions and contemporary diamond/gemstone design.
 Discover design families, sub-families, regional concepts, motifs, setting styles, construction ideas, stone combinations, silhouette changes, lightweighting approaches, bridal/everyday directions and emerging hybrids.
 Do NOT restrict yourself to a predefined category list. The purpose is to discover concepts the user may not know to name.
@@ -57,8 +63,10 @@ Return concise JSON with keys: trends (array), discovered_families (array), oppo
     _log(f'research response chars={len(raw)}')
     return _json_from_text(raw)
 
-def generate_concepts(research: Dict, total: int) -> List[Dict]:
+def generate_concepts(research: Dict, total: int, selected_categories=None, selected_lanes=None) -> List[Dict]:
     _require_client()
+    selected_categories = selected_categories or []
+    selected_lanes = selected_lanes or ['Diamond','South Indian Gemstone']
     all_items = []
     chunk = 60
     batch_no=0
@@ -72,8 +80,29 @@ def generate_concepts(research: Dict, total: int) -> List[Dict]:
         if isinstance(items, dict): items = items.get('concepts', [])
         if not isinstance(items, list) or not items:
             raise ValueError(f'Concept batch {batch_no} returned no concepts')
-        all_items.extend(items[:need])
-        _log(f'concept batch {batch_no}: received {len(items[:need])}; total={len(all_items)}')
+        if selected_categories:
+            allowed={c.strip().lower():c for c in selected_categories}
+            filtered=[]
+            for item in items:
+                cat=str(item.get('category','')).strip().lower()
+                if cat in allowed:
+                    item['category']=allowed[cat]
+                    filtered.append(item)
+            items=filtered
+        if selected_lanes:
+            allowed_lanes={c.strip().lower():c for c in selected_lanes}
+            filtered=[]
+            for item in items:
+                lane=str(item.get('lane','')).strip().lower()
+                if lane in allowed_lanes:
+                    item['lane']=allowed_lanes[lane]
+                    filtered.append(item)
+            items=filtered
+        if not items:
+            raise ValueError(f'Concept batch {batch_no} did not follow the selected category/lane controls')
+        take=items[:need]
+        all_items.extend(take)
+        _log(f'concept batch {batch_no}: received {len(take)} valid selected-category concepts; total={len(all_items)}')
     return all_items[:total]
 
 def score_concepts(items: List[Dict]) -> List[Dict]:
