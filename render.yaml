@@ -30,7 +30,9 @@ services:
       - key: CONCEPT_POOL_SIZE
         value: '300'
       - key: MAX_RENDER_PER_CYCLE
-        value: '30'
+        value: '100'
+      - key: PRE_RENDER_MIN_SCORE
+        value: '70'
       - key: DISPLAY_THRESHOLD
         value: '95'
       - key: GENERATION_CONCURRENCY

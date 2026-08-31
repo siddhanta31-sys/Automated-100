@@ -6,7 +6,7 @@ from intelligence import _json_from_text, _text
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 
-def build_prompt(c):
+def build_prompt(c, revision_note=''):
     return f'''Create a premium jewellery DESIGN SKETCH / clean product concept visualization, not a lifestyle photo.
 Original design only; do not copy any branded SKU.
 Lane: {c.get('lane')}
@@ -16,12 +16,13 @@ Concept: {c.get('description')}
 Materials/stones: {c.get('materials')}
 Target weight: {c.get('target_weight')}
 Regional signal: {c.get('region_signal')}
-Make the jewellery architecture clear enough for a professional designer to evaluate stone layout, motif rhythm, setting strategy and metal distribution. White/neutral studio background, centered, high design readability.'''
+Make the jewellery architecture clear enough for a professional designer to evaluate stone layout, motif rhythm, setting strategy and metal distribution. White/neutral studio background, centered, high design readability.
+{('Revision instruction: ' + revision_note) if revision_note else ''}'''
 
 
-def render_design(c, cycle_id, idx):
+def render_design(c, cycle_id, idx, revision_note=''):
     os.makedirs(IMAGE_DIR, exist_ok=True)
-    result = client.images.generate(model=IMAGE_MODEL, prompt=build_prompt(c), size=IMAGE_SIZE, quality=IMAGE_QUALITY)
+    result = client.images.generate(model=IMAGE_MODEL, prompt=build_prompt(c, revision_note), size=IMAGE_SIZE, quality=IMAGE_QUALITY)
     item = result.data[0]
     path = os.path.join(IMAGE_DIR, f'c{cycle_id}_{idx}_{int(time.time())}.png')
     if getattr(item,'b64_json',None):
