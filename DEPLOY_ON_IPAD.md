@@ -1,11 +1,31 @@
-# Deploy Trend2Sketch Studio from iPad
+# Update your existing Render deployment
 
-1. Download and unzip this package in Files.
-2. In GitHub Safari, create/open a private repository or a new branch dedicated to Studio.
-3. Upload every file from the package into the repository root and commit.
-4. In Render, create a new Blueprint from that repository.
-5. Enter `APP_PASSWORD` and `OPENAI_API_KEY`. Keep secrets only in Render.
-6. Deploy. Do not delete the existing Auto100 service until Studio has completed several successful cycles.
-7. Open the new Render URL in Safari. Share → Add to Home Screen.
+1. Unzip this package.
+2. Replace the files in your existing private GitHub Trend2Sketch repository.
+3. Commit to `main`.
+4. Render will redeploy automatically.
 
-The default Studio settings explore 300 concepts every 30 minutes, render at most 30 high-scoring candidates, and show only final scores of 95+.
+## Required Render Environment
+- APP_PASSWORD
+- OPENAI_API_KEY
+
+## Automatic generation
+- AUTO_INTERVAL_MINUTES=30
+- AUTO_RUN_ON_START=true
+- GENERATION_CONCURRENCY=4
+- OPENAI_IMAGE_QUALITY=low
+
+## Output per batch
+- 50 Diamond designs
+- 50 South Indian gemstone designs
+- 100 total
+- All 10 categories covered in both lanes
+- 5 weight bands per category
+
+## Optional email
+- SEND_TO_EMAIL
+- RESEND_API_KEY
+- SEND_FROM_EMAIL
+- APP_PUBLIC_URL
+
+Open the Render URL in Safari -> Share -> Add to Home Screen.

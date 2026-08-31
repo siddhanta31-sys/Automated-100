@@ -1,47 +1,38 @@
 services:
   - type: web
-    name: trend2sketch-studio
+    name: trend2sketch-autonomous
     runtime: docker
-    plan: standard
-    healthCheckPath: /
+    plan: starter
+    autoDeploy: true
+    healthCheckPath: /_stcore/health
     disk:
-      name: trend2sketch-studio-data
-      mountPath: /var/data
-      sizeGB: 20
+      name: trend2sketch-data
+      mountPath: /var/data/trend2sketch
+      sizeGB: 10
     envVars:
       - key: TREND2SKETCH_DATA_DIR
-        value: /var/data/trend2sketch-studio
+        value: /var/data/trend2sketch
       - key: APP_PASSWORD
         sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_TEXT_MODEL
         value: gpt-5.6-luna
-      - key: OPENAI_VISION_MODEL
-        value: gpt-5.6-luna
       - key: OPENAI_IMAGE_MODEL
         value: gpt-image-2
       - key: OPENAI_IMAGE_QUALITY
         value: low
       - key: AUTO_INTERVAL_MINUTES
-        value: '30'
+        value: "30"
       - key: AUTO_RUN_ON_START
-        value: 'true'
-      - key: CONCEPT_POOL_SIZE
-        value: '300'
-      - key: MAX_RENDER_PER_CYCLE
-        value: '100'
-      - key: PRE_RENDER_MIN_SCORE
-        value: '70'
-      - key: DISPLAY_THRESHOLD
-        value: '95'
+        value: "true"
       - key: GENERATION_CONCURRENCY
-        value: '3'
-      - key: DAILY_API_BUDGET_USD
-        value: '10'
-      - key: EST_IMAGE_COST_USD
-        value: '0.03'
-      - key: RETENTION_DAYS
-        value: '30'
+        value: "4"
+      - key: SEND_TO_EMAIL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: SEND_FROM_EMAIL
+        sync: false
       - key: APP_PUBLIC_URL
         sync: false
