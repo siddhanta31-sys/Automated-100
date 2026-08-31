@@ -1,12 +1,13 @@
 import os, json
 import streamlit as st
 from config import *
-from db import init_db, query, one, execute, today_spend, get_setting, get_int_setting, get_bool_setting, set_setting
+from db import init_db, query, one, execute, today_spend, get_setting, get_int_setting, get_bool_setting, set_setting, active_cycle, mark_stale_running_cycles
 from safety import system_health
 from pipeline import run_cycle
 
 st.set_page_config(page_title='Trend2Sketch Advanced Studio', page_icon='💎', layout='wide')
 init_db()
+mark_stale_running_cycles(CYCLE_STALE_MINUTES)
 
 if APP_PASSWORD:
     if 'auth' not in st.session_state: st.session_state.auth=False
@@ -113,14 +114,24 @@ with st.expander('System health', expanded=False):
     c[0].metric('RAM used', f"{h['memory_percent']:.1f}%")
     c[1].metric('RAM available', f"{h['memory_available_gb']:.1f} GB")
     c[2].metric('Disk free', f"{h['disk_free_gb']:.1f} GB")
-    c[3].metric('Health', 'OK' if h['ok'] else 'GUARD ACTIVE')
+    active_now=active_cycle()
+    health_label='WORKING' if active_now else ('HEALTHY' if h['ok'] else 'ATTENTION REQUIRED')
+    c[3].metric('Health', health_label)
+    st.write(f'Single-cycle lock: ON • Auto retry: ON • Stale recovery: ON • API timeout: {API_TIMEOUT_SECONDS:.0f}s')
     st.write(f'Automatic interval: {AUTO_INTERVAL_MINUTES} min • Research pool: {CONCEPT_POOL_SIZE} • Current render cap: {render_cap} • Pre-render floor: {PRE_RENDER_MIN_SCORE:.0f} • Current acceptance threshold: {quality_threshold} • Autonomous: {"ON" if auto_enabled else "PAUSED"}')
     st.write('Active lanes: ' + ', '.join(selected_lanes) + ' • Categories: ' + (', '.join(selected_categories) if selected_categories else 'AUTO-DISCOVER'))
 
-if st.button('Generate one trial cycle now', type='primary'):
-    with st.spinner('Running research, concept discovery, scoring and rendering with your current live controls...'):
+active = active_cycle()
+if active:
+    st.info(f"🟢 System is already working on cycle #{active.get('id')} — stage: {active.get('stage','working')}. A second cycle will not be started.")
+
+if st.button('Generate one trial cycle now', type='primary', disabled=bool(active)):
+    with st.spinner('Running one protected cycle. Automatic retries and single-cycle lock are active...'):
         cid=run_cycle(manual=True)
-    st.success(f'Cycle #{cid} finished/updated.')
+    if cid:
+        st.success(f'Cycle #{cid} finished/updated.')
+    else:
+        st.info('No new cycle was started because another cycle was already active.')
     st.rerun()
 
 st.subheader(f'Accepted Design Library — {quality_threshold}+ Final Score')

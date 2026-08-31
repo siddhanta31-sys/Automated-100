@@ -1,9 +1,10 @@
-import hashlib, json, re
+import hashlib, json, re, time, random
 from typing import List, Dict
 from openai import OpenAI
-from config import OPENAI_API_KEY, TEXT_MODEL, VISION_MODEL, RESEARCH_DOMAINS
+from config import (OPENAI_API_KEY, TEXT_MODEL, VISION_MODEL, RESEARCH_DOMAINS,
+                    API_TIMEOUT_SECONDS, API_MAX_RETRIES, CONCEPT_BATCH_SIZE, CONCEPT_MAX_BATCHES)
 
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+client = OpenAI(api_key=OPENAI_API_KEY, timeout=API_TIMEOUT_SECONDS, max_retries=2) if OPENAI_API_KEY else None
 
 def _log(msg):
     print(f'[Trend2Sketch][intelligence] {msg}', flush=True)
@@ -34,6 +35,19 @@ def _json_from_text(text):
                 except Exception: pass
         raise ValueError(f'Model response was not valid JSON. First 500 chars: {text[:500]}')
 
+def _retry(label, fn, retries=None):
+    retries = API_MAX_RETRIES if retries is None else retries
+    last = None
+    for attempt in range(1, max(1, retries)+1):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            _log(f'{label} attempt {attempt}/{retries} failed: {type(e).__name__}: {e}')
+            if attempt < retries:
+                time.sleep(min(12, 2 ** (attempt-1)) + random.random())
+    raise last
+
 def research_market(selected_categories=None, selected_lanes=None):
     _require_client()
     domains = ', '.join(RESEARCH_DOMAINS)
@@ -47,79 +61,114 @@ Research current PUBLIC catalogue and trend signals from the web, especially {do
 {category_instruction}
 Also use broad public knowledge of Indian jewellery traditions and contemporary diamond/gemstone design.
 Discover design families, sub-families, regional concepts, motifs, setting styles, construction ideas, stone combinations, silhouette changes, lightweighting approaches, bridal/everyday directions and emerging hybrids.
-Do NOT restrict yourself to a predefined category list. The purpose is to discover concepts the user may not know to name.
+Do NOT restrict yourself to a predefined category list unless the user selected categories. The purpose is to discover concepts the user may not know to name.
 Focus on South Indian gemstone jewellery and diamond jewellery, while allowing cross-category innovation.
 Return concise JSON with keys: trends (array), discovered_families (array), opportunities (array), avoid_copying_note (string).'''
     try:
         _log(f'research request model={TEXT_MODEL}, web_search=on')
-        resp = client.responses.create(model=TEXT_MODEL, tools=[{'type':'web_search'}], input=prompt)
+        return _retry('web research', lambda: _json_from_text(_text(client.responses.create(model=TEXT_MODEL, tools=[{'type':'web_search'}], input=prompt))))
     except Exception as first_error:
-        _log(f'web research call failed: {type(first_error).__name__}: {first_error}; retrying without web_search')
-        try:
-            resp = client.responses.create(model=TEXT_MODEL, input=prompt + '\nIf web search is unavailable, use general jewellery design knowledge and clearly label it as non-live.')
-        except Exception as second_error:
-            raise RuntimeError(f'Research API failed with web search ({type(first_error).__name__}: {first_error}) and fallback failed ({type(second_error).__name__}: {second_error})') from second_error
-    raw=_text(resp)
-    _log(f'research response chars={len(raw)}')
-    return _json_from_text(raw)
+        _log(f'web research exhausted retries: {type(first_error).__name__}: {first_error}; using non-web fallback')
+        return _retry('research fallback', lambda: _json_from_text(_text(client.responses.create(model=TEXT_MODEL, input=prompt + '\nIf web search is unavailable, use general jewellery design knowledge and clearly label it as non-live.'))))
+
+def _normalize_choice(value, allowed):
+    raw=str(value or '').strip()
+    if not allowed: return raw
+    exact={a.lower():a for a in allowed}
+    if raw.lower() in exact: return exact[raw.lower()]
+    # tolerate punctuation/slash differences but never invent a category outside the user's choices
+    canon=lambda x: re.sub(r'[^a-z0-9]+',' ',x.lower()).strip()
+    c=canon(raw)
+    for a in allowed:
+        ca=canon(a)
+        if c==ca or (c and (c in ca or ca in c)):
+            return a
+    return None
 
 def generate_concepts(research: Dict, total: int, selected_categories=None, selected_lanes=None) -> List[Dict]:
     _require_client()
     selected_categories = selected_categories or []
     selected_lanes = selected_lanes or ['Diamond','South Indian Gemstone']
-    all_items = []
-    chunk = 60
+    all_items=[]
     batch_no=0
-    while len(all_items) < total:
-        batch_no+=1
-        need = min(chunk, total-len(all_items))
-        prompt = f'''You are an expert jewellery creative director. Based on this research JSON:\n{json.dumps(research)[:14000]}\n\nCreate {need} ORIGINAL jewellery design concepts. Explore wide variety; do not repeat the same few necklace/earring archetypes.\nUse dynamic categories and concept families discovered from research. Include both Diamond and South Indian Gemstone directions across the batch.\nEach concept must be manufacturable in precious metal and distinct in architecture, motif, setting or wearing experience.\nDo not recreate a known branded SKU.\nReturn ONLY a JSON array. Each item must have:\nlane, category, concept_family, title, description, materials, target_weight, region_signal, commercial_rationale, originality_rationale, manufacturability_rationale.'''
-        _log(f'concept batch {batch_no}: requesting {need}')
-        resp = client.responses.create(model=TEXT_MODEL, input=prompt)
-        items = _json_from_text(_text(resp))
-        if isinstance(items, dict): items = items.get('concepts', [])
-        if not isinstance(items, list) or not items:
-            raise ValueError(f'Concept batch {batch_no} returned no concepts')
-        if selected_categories:
-            allowed={c.strip().lower():c for c in selected_categories}
-            filtered=[]
-            for item in items:
-                cat=str(item.get('category','')).strip().lower()
-                if cat in allowed:
-                    item['category']=allowed[cat]
-                    filtered.append(item)
-            items=filtered
-        if selected_lanes:
-            allowed_lanes={c.strip().lower():c for c in selected_lanes}
-            filtered=[]
-            for item in items:
-                lane=str(item.get('lane','')).strip().lower()
-                if lane in allowed_lanes:
-                    item['lane']=allowed_lanes[lane]
-                    filtered.append(item)
-            items=filtered
-        if not items:
-            raise ValueError(f'Concept batch {batch_no} did not follow the selected category/lane controls')
-        take=items[:need]
+    no_progress=0
+    batch_size=max(10,min(60,CONCEPT_BATCH_SIZE))
+    max_batches=max((total + batch_size - 1)//batch_size + 3, CONCEPT_MAX_BATCHES)
+    while len(all_items) < total and batch_no < max_batches:
+        batch_no += 1
+        need=min(batch_size,total-len(all_items))
+        cats = ('The category field MUST be exactly one of: ' + json.dumps(selected_categories) + '.') if selected_categories else 'Choose category dynamically from the research.'
+        lanes = 'The lane field MUST be exactly one of: ' + json.dumps(selected_lanes) + '.'
+        prompt=f'''You are an expert jewellery creative director. Based on this research JSON:\n{json.dumps(research)[:14000]}
+
+Create exactly {need} ORIGINAL jewellery design concepts.
+{cats}
+{lanes}
+Spread the batch across the allowed categories and lanes as evenly as practical. Explore wide variety; do not repeat the same few archetypes.
+Each concept must be manufacturable in precious metal and distinct in architecture, motif, setting, stone hierarchy or wearing experience.
+Do not recreate a known branded SKU.
+Return ONLY a JSON array. Each item must have: lane, category, concept_family, title, description, materials, target_weight, region_signal, commercial_rationale, originality_rationale, manufacturability_rationale.'''
+        _log(f'concept batch {batch_no}: requesting {need}; current={len(all_items)}/{total}')
+        try:
+            items=_retry(f'concept batch {batch_no}', lambda: _json_from_text(_text(client.responses.create(model=TEXT_MODEL,input=prompt))))
+        except Exception as e:
+            _log(f'concept batch {batch_no} skipped after retries: {type(e).__name__}: {e}')
+            no_progress += 1
+            if no_progress >= 3 and all_items:
+                break
+            continue
+        if isinstance(items,dict): items=items.get('concepts',[])
+        if not isinstance(items,list): items=[]
+        valid=[]
+        for item in items:
+            if not isinstance(item,dict): continue
+            lane=_normalize_choice(item.get('lane'),selected_lanes)
+            cat=_normalize_choice(item.get('category'),selected_categories) if selected_categories else str(item.get('category','')).strip()
+            if not lane or (selected_categories and not cat):
+                continue
+            item['lane']=lane
+            if cat: item['category']=cat
+            valid.append(item)
+        if not valid:
+            no_progress += 1
+            _log(f'concept batch {batch_no}: 0 valid concepts; retry budget remains')
+            if no_progress >= 3 and all_items: break
+            continue
+        no_progress=0
+        take=valid[:need]
         all_items.extend(take)
-        _log(f'concept batch {batch_no}: received {len(take)} valid selected-category concepts; total={len(all_items)}')
+        _log(f'concept batch {batch_no}: accepted {len(take)}; total={len(all_items)}/{total}')
+    if not all_items:
+        raise RuntimeError('Concept generation produced no valid concepts after automatic retries.')
+    if len(all_items) < total:
+        _log(f'concept pool partial but usable: {len(all_items)}/{total}; continuing instead of hanging')
     return all_items[:total]
 
 def score_concepts(items: List[Dict]) -> List[Dict]:
-    _require_client()
-    out=[]
-    for i in range(0, len(items), 40):
-        chunk=items[i:i+40]
-        batch_no=i//40+1
-        prompt=f'''Act as a strict jewellery design director. Score each concept from 1-100. Scores above 95 must be rare and exceptional.\nEvaluate: originality 20, commercial relevance 20, aesthetics/balance 15, manufacturability 15, stone/material logic 10, weight practicality 10, regional/concept authenticity 5, trend relevance 5.\nPenalize generic designs, repetitive variations, impractical construction and likely copies.\nReturn ONLY JSON array with same index order; each item: score (number), reason (short string), risk (short string).\nConcepts:\n{json.dumps(chunk)[:24000]}'''
+    _require_client(); out=[]
+    for i in range(0,len(items),30):
+        chunk=items[i:i+30]; batch_no=i//30+1
+        prompt=f'''Act as a strict jewellery design director. Score each concept from 1-100. Scores above 95 must be rare and exceptional.
+Evaluate: originality 20, commercial relevance 20, aesthetics/balance 15, manufacturability 15, stone/material logic 10, weight practicality 10, regional/concept authenticity 5, trend relevance 5.
+Penalize generic designs, repetitive variations, impractical construction and likely copies.
+Return ONLY JSON array with same index order; each item: score (number), reason (short string), risk (short string).
+Concepts:\n{json.dumps(chunk)[:24000]}'''
         _log(f'score batch {batch_no}: scoring {len(chunk)}')
-        resp=client.responses.create(model=TEXT_MODEL,input=prompt)
-        scores=_json_from_text(_text(resp))
-        if isinstance(scores, dict): scores=scores.get('scores',[])
-        if not isinstance(scores,list) or len(scores) < len(chunk):
-            raise ValueError(f'Score batch {batch_no} returned {len(scores) if isinstance(scores,list) else 0} scores for {len(chunk)} concepts')
-        for concept, s in zip(chunk,scores):
-            c=dict(concept); c['pre_score']=float(s.get('score',0)); c['score_reason']=s.get('reason',''); c['risk']=s.get('risk',''); out.append(c)
+        try:
+            scores=_retry(f'score batch {batch_no}',lambda: _json_from_text(_text(client.responses.create(model=TEXT_MODEL,input=prompt))))
+        except Exception as e:
+            _log(f'score batch {batch_no} skipped after retries: {type(e).__name__}: {e}')
+            continue
+        if isinstance(scores,dict): scores=scores.get('scores',[])
+        if not isinstance(scores,list): scores=[]
+        for concept,s in zip(chunk,scores):
+            if not isinstance(s,dict): continue
+            c=dict(concept)
+            try: c['pre_score']=float(s.get('score',0))
+            except Exception: c['pre_score']=0.0
+            c['score_reason']=s.get('reason',''); c['risk']=s.get('risk',''); out.append(c)
+    if not out:
+        raise RuntimeError('Concept scoring produced no usable results after automatic retries.')
     return out
 
 def fingerprint(item: Dict) -> str:

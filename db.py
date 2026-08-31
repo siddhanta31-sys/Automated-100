@@ -125,3 +125,29 @@ def get_int_setting(key, default):
 def get_bool_setting(key, default):
     raw = str(get_setting(key, '1' if default else '0')).strip().lower()
     return raw in ('1','true','yes','on')
+
+def mark_running_cycles_interrupted(note='Recovered after app/worker restart.'):
+    """Close orphaned running rows from a previous process/deploy."""
+    c = conn()
+    cur = c.execute("UPDATE cycles SET status='interrupted', stage='recovered', finished_at=?, note=? WHERE status='running'", (now_iso(), note))
+    c.commit()
+    return cur.rowcount
+
+def mark_stale_running_cycles(minutes=75):
+    """Close only very old running rows. Safe to call periodically."""
+    try:
+        mins = max(1, int(minutes))
+    except Exception:
+        mins = 75
+    c = conn()
+    cur = c.execute("""
+        UPDATE cycles
+        SET status='interrupted', stage='stale_recovered', finished_at=?, note='Automatically recovered stale cycle.'
+        WHERE status='running'
+          AND datetime(started_at) < datetime('now', ?)
+    """, (now_iso(), f'-{mins} minutes'))
+    c.commit()
+    return cur.rowcount
+
+def active_cycle():
+    return one("SELECT * FROM cycles WHERE status='running' ORDER BY id DESC LIMIT 1")
