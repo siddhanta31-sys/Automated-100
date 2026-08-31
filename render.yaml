@@ -59,3 +59,15 @@ services:
         value: '15'
       - key: RENDER_RETRIES
         value: '2'
+      - key: FAST_CONCEPT_WORKERS
+        value: '4'
+      - key: BALANCED_CONCEPT_WORKERS
+        value: '3'
+      - key: DEEP_CONCEPT_WORKERS
+        value: '2'
+      - key: FAST_SCORE_WORKERS
+        value: '4'
+      - key: BALANCED_SCORE_WORKERS
+        value: '3'
+      - key: DEEP_SCORE_WORKERS
+        value: '2'

@@ -22,6 +22,8 @@ if APP_PASSWORD:
 quality_threshold = max(75, min(100, get_int_setting('quality_threshold', DISPLAY_THRESHOLD)))
 render_cap = max(1, min(100, get_int_setting('render_cap', MAX_RENDER_PER_CYCLE)))
 auto_enabled = get_bool_setting('auto_enabled', True)
+speed_mode = get_setting('speed_mode','Balanced') or 'Balanced'
+if speed_mode not in ('Fast','Balanced','Deep'): speed_mode='Balanced'
 try:
     selected_categories = json.loads(get_setting('selected_categories','[]') or '[]')
     if not isinstance(selected_categories,list): selected_categories=[]
@@ -34,22 +36,24 @@ except Exception:
     selected_lanes=['Diamond','South Indian Gemstone']
 
 st.title('💎 Trend2Sketch Advanced Studio')
-st.caption('Autonomous jewellery intelligence • Dynamic South Indian + Diamond discovery • Rank → Render → Visually score → Filter')
+st.caption('Autonomous jewellery intelligence • Dynamic South Indian + Diamond discovery • Parallel Discover → Parallel Score → Render → Visually score → Filter')
 
 with st.expander('🎛️ Live Studio Controls — no redeployment needed', expanded=True):
-    c1,c2,c3=st.columns(3)
+    c1,c2,c3,c4=st.columns(4)
     new_threshold=c1.slider('Quality acceptance score',75,100,quality_threshold,help='Change this anytime. Designs at or above this final score become accepted in the library.')
     new_cap=c2.slider('Number of designs to generate per cycle',1,100,render_cap,step=1,help='Choose the exact number of jewellery designs the system should attempt to generate in each cycle. Change this anytime without redeploying.')
     new_auto=c3.toggle('Autonomous cycles enabled',value=auto_enabled,help='Turn background scheduled generation on/off without changing Render or GitHub.')
-    changed = (new_threshold != quality_threshold) or (new_cap != render_cap) or (new_auto != auto_enabled)
+    new_speed=c4.selectbox('Worker speed', ['Fast','Balanced','Deep'], index=['Fast','Balanced','Deep'].index(speed_mode), help='Fast uses a smaller adaptive pool + more parallel calls. Balanced is recommended. Deep uses the largest research pool.')
+    changed = (new_threshold != quality_threshold) or (new_cap != render_cap) or (new_auto != auto_enabled) or (new_speed != speed_mode)
     if changed:
         set_setting('quality_threshold', new_threshold)
         set_setting('render_cap', new_cap)
         set_setting('auto_enabled', '1' if new_auto else '0')
+        set_setting('speed_mode', new_speed)
         # Reclassify already-rendered designs immediately. No API call or regeneration required.
         execute('UPDATE designs SET visible=CASE WHEN final_score>=? THEN 1 ELSE 0 END WHERE final_score IS NOT NULL',(new_threshold,))
         st.success('Saved instantly. These settings persist after closing the browser and after normal app restarts.')
-        quality_threshold,render_cap,auto_enabled=new_threshold,new_cap,new_auto
+        quality_threshold,render_cap,auto_enabled,speed_mode=new_threshold,new_cap,new_auto,new_speed
 
     st.markdown('**Product Development Selector**')
     st.caption('Choose exactly which jewellery product categories the AI should develop. Select several at once. These choices apply to both manual and autonomous cycles.')
@@ -117,8 +121,8 @@ with st.expander('System health', expanded=False):
     active_now=active_cycle()
     health_label='WORKING' if active_now else ('HEALTHY' if h['ok'] else 'ATTENTION REQUIRED')
     c[3].metric('Health', health_label)
-    st.write(f'Single-cycle lock: ON • Auto retry: ON • Stale recovery: ON • API timeout: {API_TIMEOUT_SECONDS:.0f}s')
-    st.write(f'Automatic interval: {AUTO_INTERVAL_MINUTES} min • Research pool: {CONCEPT_POOL_SIZE} • Current render cap: {render_cap} • Pre-render floor: {PRE_RENDER_MIN_SCORE:.0f} • Current acceptance threshold: {quality_threshold} • Autonomous: {"ON" if auto_enabled else "PAUSED"}')
+    st.write(f'Single-cycle lock: ON • Parallel pipeline: ON • Research cache: ON • Auto retry: ON • API timeout: {API_TIMEOUT_SECONDS:.0f}s')
+    st.write(f'Automatic interval: {AUTO_INTERVAL_MINUTES} min • Worker speed: {speed_mode} • Adaptive concept pool: ON • Current render cap: {render_cap} • Pre-render floor: {PRE_RENDER_MIN_SCORE:.0f} • Acceptance threshold: {quality_threshold} • Autonomous: {"ON" if auto_enabled else "PAUSED"}')
     st.write('Active lanes: ' + ', '.join(selected_lanes) + ' • Categories: ' + (', '.join(selected_categories) if selected_categories else 'AUTO-DISCOVER'))
 
 active = active_cycle()

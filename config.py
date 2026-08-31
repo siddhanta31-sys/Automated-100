@@ -87,3 +87,12 @@ CATEGORY_PRESETS = {
     'South Indian bridal': ['Long Necklace / Haram','Bridal Necklace','Jhumka','Vaddanam / Waist Belt','Vanki / Armlet','Maang Tikka / Nethi Chutti','Hair Ornament / Jada Billa','Temple Jewellery Set','Bridal Set'],
     'Diamond everyday': ['Choker','Short Necklace','Pendant','Chain','Stud Earrings','Drop Earrings','Hoops','Ring','Bracelet','Mangalsutra'],
 }
+
+
+# Fast-pipeline defaults. Live speed mode can be changed in the app without redeploying.
+FAST_CONCEPT_WORKERS = int(os.getenv('FAST_CONCEPT_WORKERS', '4'))
+BALANCED_CONCEPT_WORKERS = int(os.getenv('BALANCED_CONCEPT_WORKERS', '3'))
+DEEP_CONCEPT_WORKERS = int(os.getenv('DEEP_CONCEPT_WORKERS', '2'))
+FAST_SCORE_WORKERS = int(os.getenv('FAST_SCORE_WORKERS', '4'))
+BALANCED_SCORE_WORKERS = int(os.getenv('BALANCED_SCORE_WORKERS', '3'))
+DEEP_SCORE_WORKERS = int(os.getenv('DEEP_SCORE_WORKERS', '2'))
