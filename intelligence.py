@@ -35,22 +35,55 @@ def _retry(label,fn,retries=None):
             if attempt<retries: time.sleep(min(10,2**(attempt-1))+random.random())
     raise last
 
-def research_market(selected_categories=None,selected_lanes=None):
+def research_market(selected_categories=None,selected_lanes=None,deep=False,feedback=None,references=None,product_constraints=None):
     _require_client(); domains=', '.join(RESEARCH_DOMAINS)
     selected_categories=selected_categories or []; selected_lanes=selected_lanes or ['Diamond','South Indian Gemstone']
     cat=('Focus product development ONLY on these selected product categories: '+', '.join(selected_categories)+'.') if selected_categories else 'Product categories are open-ended; discover promising categories dynamically.'
     lanes='Selected design lanes: '+', '.join(selected_lanes)+'.'
-    prompt=f'''You are the autonomous jewellery research director for an Indian jewellery manufacturer.
-Research current PUBLIC catalogue and trend signals from the web, especially {domains}, but do not copy any specific branded product.
-{lanes}\n{cat}
-Use broad knowledge of Indian jewellery traditions and contemporary diamond/gemstone design. Discover design families, sub-families, regional concepts, motifs, setting styles, construction ideas, stone combinations, silhouette changes, lightweighting approaches, bridal/everyday directions and emerging hybrids.
-Return concise JSON with keys: trends (array), discovered_families (array), opportunities (array), avoid_copying_note (string).'''
-    try:
-        _log(f'research request model={TEXT_MODEL}, web_search=on')
-        return _retry('web research',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,tools=[{'type':'web_search'}],input=prompt))))
-    except Exception as e:
-        _log(f'web research exhausted retries: {type(e).__name__}: {e}; using non-web fallback')
-        return _retry('research fallback',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,input=prompt+'\nIf web search is unavailable, use general jewellery design knowledge and label it non-live.'))))
+    fb=json.dumps((feedback or [])[:80],ensure_ascii=False)[:10000]
+    refs=json.dumps((references or [])[:60],ensure_ascii=False)[:8000]
+    constraints=json.dumps(product_constraints or {},ensure_ascii=False)[:4000]
+    base=f"""You are the R&D research director of an Indian jewellery manufacturing company, not a generic image-prompt writer.
+Research PUBLIC current jewellery signals. Prioritize {domains}, then broaden to other credible Indian retailer/manufacturer/catalogue/exhibition/trend sources when useful. Never copy a specific branded SKU.
+{lanes}
+{cat}
+Study PRODUCT ARCHITECTURE, not just visual keywords: category, concept family/sub-family, regional grammar, motif system, stone hierarchy, stone shapes/cuts, setting language, articulation, construction, approximate weight strategy, negative space, repeat rhythm, centre-piece architecture, detachable/convertible opportunities, wearability, manufacturing constraints, and lightweighting.
+For South Indian gemstone jewellery explicitly distinguish useful families/sub-families such as guttapusalu, kasu, Lakshmi/temple, mango, kemp, navaratna, nakshi, peacock/yali, chakra, vanki-derived geometry, antique bridal, contemporary gemstone and credible hybrids; do not force these if research points elsewhere.
+Recent owner feedback, if any: {fb}
+Owner-approved reference-library notes (learn design DNA; NEVER copy a specific piece): {refs}
+Current product engineering constraints: {constraints}
+The goal is commercially developable concepts that a jewellery design/CAD team can use, not merely attractive AI imagery."""
+    if not deep:
+        prompt=base+"""
+Return concise JSON with keys: trends, discovered_families, opportunities, manufacturing_signals, avoid_copying_note."""
+        try:
+            _log(f'research request model={TEXT_MODEL}, web_search=on')
+            return _retry('web research',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,tools=[{'type':'web_search'}],input=prompt))))
+        except Exception as e:
+            _log(f'web research exhausted retries: {type(e).__name__}: {e}; using non-web fallback')
+            return _retry('research fallback',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,input=prompt+'\nIf live search is unavailable, label limitations.'))))
+
+    lenses=[
+      'South Indian heritage/regional concept taxonomy and credible contemporary hybrids',
+      'commercial retail/catalogue signals, stone layouts, silhouettes, lightweighting and price/weight practicality',
+      'manufacturing/CAD feasibility: settings, articulation, strength, comfort, dimensions, stone-size logic and production risks'
+    ]
+    def agent(i,lens):
+        prompt=base+f"""
+DEEP RESEARCH LENS {i}: {lens}. Use web search broadly. Return JSON with evidence_signals, families, subfamilies, opportunities, construction_rules, stone_rules, avoid_patterns, white_space_opportunities."""
+        return _retry(f'deep research agent {i}',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,tools=[{'type':'web_search'}],input=prompt))))
+    reports=[]
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futs=[ex.submit(agent,i+1,l) for i,l in enumerate(lenses)]
+        for f in as_completed(futs):
+            try: reports.append(f.result())
+            except Exception as e: _log(f'deep research agent failed: {type(e).__name__}: {e}')
+    if not reports:
+        return research_market(selected_categories,selected_lanes,deep=False,feedback=feedback,references=references,product_constraints=product_constraints)
+    synthesis=f"""Act as Chief Jewellery Product Director. Synthesize these independent research reports into an R&D map.
+{json.dumps(reports,ensure_ascii=False)[:30000]}
+Return ONLY JSON with: trends, discovered_families, subfamilies, opportunities, manufacturing_rules, stone_architecture_rules, regional_grammar, lightweighting_rules, avoid_patterns, concept_seeds, research_depth_note. concept_seeds must be specific product-development directions, not generic adjectives. Never recommend copying a branded SKU."""
+    return _retry('deep research synthesis',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,input=synthesis))))
 
 def _normalize_choice(value,allowed):
     raw=str(value or '').strip()
@@ -69,7 +102,7 @@ def _concept_batch(research,need,batch_no,selected_categories,selected_lanes):
     prompt=f'''You are an expert jewellery creative director. Based on this research JSON:\n{json.dumps(research)[:12000]}
 Create exactly {need} ORIGINAL jewellery design concepts. This is parallel creative batch {batch_no}; deliberately explore different architectures and motifs from other batches.
 {cats}\n{lanes}
-Spread the batch across allowed categories and lanes. Do not recreate a known branded SKU. Return ONLY a JSON array. Each item: lane, category, concept_family, title, description, materials, target_weight, region_signal, commercial_rationale, originality_rationale, manufacturability_rationale.'''
+Spread the batch across allowed categories and lanes. Do not recreate a known branded SKU. Every concept must be a CAD-actionable PRODUCT BRIEF, not a vague visual idea. Specify a distinct architecture and credible construction. Avoid generic 'floral luxury necklace' language.\nReturn ONLY a JSON array. Each item: lane, category, concept_family, title, description, materials, target_weight, region_signal, dimensions, stone_hierarchy, stone_shapes_sizes, setting_strategy, construction, articulation, comfort_notes, lightweighting_strategy, commercial_rationale, originality_rationale, manufacturability_rationale.'''
     items=_retry(f'concept batch {batch_no}',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,input=prompt))))
     if isinstance(items,dict): items=items.get('concepts',[])
     if not isinstance(items,list): return []
@@ -128,7 +161,7 @@ def generate_concepts(research:Dict,total:int,selected_categories=None,selected_
 
 def _score_chunk(chunk,batch_no):
     prompt=f'''Act as a strict jewellery design director. Score each concept from 1-100. Scores above 95 must be rare and exceptional.
-Evaluate originality 20, commercial relevance 20, aesthetics/balance 15, manufacturability 15, stone/material logic 10, weight practicality 10, regional/concept authenticity 5, trend relevance 5. Penalize generic/repetitive/impractical/copy-like ideas.
+Evaluate originality 15, commercial relevance 15, aesthetics/balance 10, manufacturability 15, stone/material logic 10, weight practicality 10, regional/concept authenticity 10, trend relevance 5, novelty/non-repetition 10. Penalize generic/repetitive/impractical/copy-like ideas.
 Return ONLY JSON array in same index order; each item: score, reason, risk.\nConcepts:\n{json.dumps(chunk)[:22000]}'''
     scores=_retry(f'score batch {batch_no}',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,input=prompt))))
     if isinstance(scores,dict): scores=scores.get('scores',[])
@@ -139,7 +172,9 @@ Return ONLY JSON array in same index order; each item: score, reason, risk.\nCon
         c=dict(concept)
         try: c['pre_score']=float(s.get('score',0))
         except Exception: c['pre_score']=0.0
-        c['score_reason']=s.get('reason',''); c['risk']=s.get('risk',''); out.append(c)
+        c['score_reason']=s.get('reason',''); c['risk']=s.get('risk',''); c['cad_instruction']=s.get('cad_instruction','')
+        c['score_dimensions']={k:s.get(k) for k in ('commercial','originality','south_indian_authenticity','stone_composition','proportion_balance','manufacturability','weight_efficiency','wearability','trend_relevance','novelty')}
+        out.append(c)
     return out
 
 def score_concepts(items:List[Dict],workers=3,progress_callback=None)->List[Dict]:

@@ -71,6 +71,23 @@ def init_db():
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS design_feedback (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      design_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      verdict TEXT NOT NULL,
+      reason TEXT,
+      note TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_feedback_design ON design_feedback(design_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS design_references (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at TEXT NOT NULL,
+      name TEXT,
+      image_path TEXT,
+      note TEXT,
+      active INTEGER DEFAULT 1
+    );
     CREATE TABLE IF NOT EXISTS spend_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       created_at TEXT NOT NULL,
@@ -83,6 +100,12 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_designs_created ON designs(created_at DESC);
     ''')
     c.commit()
+    # Forward-compatible migration for richer CAD handoff data.
+    try:
+        c.execute('ALTER TABLE designs ADD COLUMN cad_brief TEXT')
+        c.commit()
+    except sqlite3.OperationalError:
+        pass
 
 def execute(sql, params=()):
     c = conn(); cur = c.execute(sql, params); c.commit(); return cur
@@ -151,3 +174,16 @@ def mark_stale_running_cycles(minutes=75):
 
 def active_cycle():
     return one("SELECT * FROM cycles WHERE status='running' ORDER BY id DESC LIMIT 1")
+
+def feedback_summary(limit=250):
+    rows=query('''SELECT f.verdict,f.reason,f.note,d.lane,d.category,d.concept_family,d.title,d.description,d.materials,d.target_weight,d.final_score
+                  FROM design_feedback f JOIN designs d ON d.id=f.design_id ORDER BY f.id DESC LIMIT ?''',(limit,))
+    return rows
+
+def add_feedback(design_id, verdict, reason='', note=''):
+    execute('INSERT INTO design_feedback(design_id,created_at,verdict,reason,note) VALUES(?,?,?,?,?)',
+            (int(design_id),now_iso(),str(verdict),str(reason or ''),str(note or '')))
+
+
+def reference_summary(limit=60):
+    return query("SELECT id,name,note,image_path FROM design_references WHERE active=1 ORDER BY id DESC LIMIT ?",(limit,))

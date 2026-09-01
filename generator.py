@@ -26,7 +26,25 @@ Concept: {c.get('description')}
 Materials/stones: {c.get('materials')}
 Target weight: {c.get('target_weight')}
 Regional signal: {c.get('region_signal')}
-Make the jewellery architecture clear enough for a professional designer to evaluate stone layout, motif rhythm, setting strategy and metal distribution. White/neutral studio background, centered, high design readability.
+Approx dimensions: {c.get('dimensions')}
+Stone hierarchy: {c.get('stone_hierarchy')}
+Stone shapes/sizes: {c.get('stone_shapes_sizes')}
+Setting strategy: {c.get('setting_strategy')}
+Construction: {c.get('construction')}
+Articulation: {c.get('articulation')}
+Comfort: {c.get('comfort_notes')}
+Lightweighting: {c.get('lightweighting_strategy')}
+CAD direction: {c.get('cad_instruction')}
+Approx dimensions: {c.get('dimensions')}
+Stone hierarchy: {c.get('stone_hierarchy')}
+Stone shapes/sizes: {c.get('stone_shapes_sizes')}
+Setting strategy: {c.get('setting_strategy')}
+Construction: {c.get('construction')}
+Articulation: {c.get('articulation')}
+Comfort: {c.get('comfort_notes')}
+Lightweighting: {c.get('lightweighting_strategy')}
+CAD direction: {c.get('cad_instruction')}
+Make this look like a professional jewellery product-development sketch. Preserve the specified architecture exactly enough for a CAD designer to interpret stone hierarchy, approximate stone scale, motif rhythm, joints/articulation, setting strategy, negative space and metal distribution. Avoid fantasy construction, impossible stone placement, excessive decorative noise, and generic AI-jewellery symmetry. White/neutral studio background, centered, high design readability.
 {('Revision instruction: ' + revision_note) if revision_note else ''}'''
 
 def render_design(c,cycle_id,idx,revision_note=''):

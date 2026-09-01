@@ -7,6 +7,7 @@ from intelligence import research_market, generate_concepts, score_concepts, fin
 from generator import render_design, visual_score
 from safety import adaptive_concurrency, system_health
 from runtime_lock import cycle_lock
+import time
 
 
 def _log(message,cycle_id=None,stage=None):
@@ -43,7 +44,7 @@ def _speed_profile(mode,render_cap):
     if mode=='Fast':
         pool=min(180,max(60,render_cap*2+40)); return dict(mode=mode,pool=pool,batch=20,concept_workers=FAST_CONCEPT_WORKERS,score_workers=FAST_SCORE_WORKERS,cache_minutes=360)
     if mode=='Deep':
-        return dict(mode=mode,pool=max(CONCEPT_POOL_SIZE,min(400,render_cap*4)),batch=40,concept_workers=DEEP_CONCEPT_WORKERS,score_workers=DEEP_SCORE_WORKERS,cache_minutes=0)
+        return dict(mode=mode,pool=max(CONCEPT_POOL_SIZE,min(600,render_cap*DEEP_RENDER_POOL_MULTIPLIER)),batch=40,concept_workers=DEEP_CONCEPT_WORKERS,score_workers=DEEP_SCORE_WORKERS,cache_minutes=0)
     pool=min(CONCEPT_POOL_SIZE,max(100,render_cap*3)); return dict(mode=mode,pool=pool,batch=25,concept_workers=BALANCED_CONCEPT_WORKERS,score_workers=BALANCED_SCORE_WORKERS,cache_minutes=120)
 
 def _cached_research(selected_categories,selected_lanes,max_age_minutes):
@@ -98,7 +99,7 @@ def run_cycle(manual=False):
                 update_cycle(cycle_id,note=f'{profile["mode"]} mode: reused recent matching research; starting parallel discovery')
             else:
                 _log(f'calling text model {TEXT_MODEL} with automatic retry/fallback',cycle_id,stage)
-                research=research_market(selected_categories=selected_categories,selected_lanes=selected_lanes)
+                research=research_market(selected_categories=selected_categories, selected_lanes=selected_lanes, deep=(profile['mode']=='Deep'), feedback=feedback_summary(), references=reference_summary(), product_constraints={"target_weight":get_setting("target_weight_range","Auto"), "stone_strategy":get_setting("stone_strategy","Auto"), "commercial_market":get_setting("commercial_market","South India retail"), "novelty_gate":get_int_setting("novelty_gate",72)})
                 meta=json.dumps({'categories':selected_categories,'lanes':selected_lanes,'live_web':True})
                 execute('INSERT INTO research_snapshots(created_at,summary,source_note) VALUES(?,?,?)',(now_iso(),json.dumps(research),meta))
                 log_spend(cycle_id,'research_and_concepts',EST_TEXT_CYCLE_COST_USD,'configured estimate')
@@ -117,7 +118,7 @@ def run_cycle(manual=False):
             existing=_existing_texts(); shortlist=[]
             for c in sorted(scored,key=lambda x:x.get('pre_score',0),reverse=True):
                 if float(c.get('pre_score',0))<PRE_RENDER_MIN_SCORE: continue
-                if not _novel(c,existing): continue
+                if not _novel(c,existing,threshold=max(0.35,min(0.95,get_int_setting('novelty_gate',72)/100.0))): continue
                 fp=fingerprint(c)
                 if one('SELECT id FROM designs WHERE fingerprint=?',(fp,)): continue
                 shortlist.append(c); existing.append(' '.join([c.get('title',''),c.get('description',''),c.get('concept_family','')]))
@@ -132,7 +133,10 @@ def run_cycle(manual=False):
             # Fast/Balanced may safely use one extra render slot when resources allow; safety.py remains the hard guard.
             if profile['mode']=='Fast': concurrency=min(5,max(concurrency,4))
             elif profile['mode']=='Balanced': concurrency=min(4,max(concurrency,3))
-            stage='rendering'; update_cycle(cycle_id,stage=stage,note=f'{profile["mode"]}: rendering {len(shortlist)} concepts with {concurrency} parallel workers')
+            stage='rendering'; total_to_render=len(shortlist); render_started=time.monotonic()
+            start_note=f'{profile["mode"]}: rendering 0/{total_to_render} with {concurrency} parallel workers'
+            update_cycle(cycle_id,stage=stage,note=start_note)
+            _log(f'rendering started: 0/{total_to_render}; workers={concurrency}; final_gate={quality_threshold}+',cycle_id,stage)
             rendered=visible=rejected=failed=0
             def job(pair):
                 idx,c=pair; path=render_design(c,cycle_id,idx); vscore,vreason,redesign=visual_score(c,path)
@@ -147,13 +151,23 @@ def run_cycle(manual=False):
                         c,path,vscore,vreason,redesign,final=fut.result(); rendered+=1; vis=1 if final>=quality_threshold else 0
                         if vis: visible+=1
                         else: rejected+=1
-                        execute('''INSERT OR IGNORE INTO designs(cycle_id,created_at,lane,category,concept_family,title,description,materials,target_weight,region_signal,rationale,pre_score,visual_score,final_score,image_path,visible,fingerprint,status,error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
-                            cycle_id,now_iso(),c.get('lane'),c.get('category'),c.get('concept_family'),c.get('title'),c.get('description'),c.get('materials'),c.get('target_weight'),c.get('region_signal'),(c.get('score_reason','')+' | Visual: '+vreason),c.get('pre_score'),vscore,final,path,vis,fingerprint(c),'visible' if vis else 'rejected',redesign if not vis else None))
+                        cad_brief=json.dumps({k:c.get(k) for k in ('dimensions','stone_hierarchy','stone_shapes_sizes','setting_strategy','construction','articulation','comfort_notes','lightweighting_strategy','commercial_rationale','originality_rationale','manufacturability_rationale')},ensure_ascii=False)
+                        execute('''INSERT OR IGNORE INTO designs(cycle_id,created_at,lane,category,concept_family,title,description,materials,target_weight,region_signal,rationale,pre_score,visual_score,final_score,image_path,visible,fingerprint,status,error,cad_brief) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
+                            cycle_id,now_iso(),c.get('lane'),c.get('category'),c.get('concept_family'),c.get('title'),c.get('description'),c.get('materials'),c.get('target_weight'),c.get('region_signal'),(c.get('score_reason','')+' | Visual: '+vreason),c.get('pre_score'),vscore,final,path,vis,fingerprint(c),'visible' if vis else 'rejected',redesign if not vis else None,cad_brief))
                         log_spend(cycle_id,'image',EST_IMAGE_COST_USD,'configured estimate')
                     except Exception as e:
                         failed+=1; _log(f'render job failed after retries: {type(e).__name__}: {e}',cycle_id,stage)
-                    update_cycle(cycle_id,rendered=rendered,visible=visible,rejected=rejected,failed=failed,estimated_cost_usd=EST_TEXT_CYCLE_COST_USD+rendered*EST_IMAGE_COST_USD,note=f'{profile["mode"]}: {rendered}/{len(shortlist)} rendered, {failed} failed')
-            update_cycle(cycle_id,status='completed',stage='complete',finished_at=now_iso(),rendered=rendered,visible=visible,rejected=rejected,failed=failed,note=f'Cycle completed successfully in {profile["mode"]} mode; parallel pipeline active.')
+                    done=rendered+failed
+                    elapsed=max(0.0,time.monotonic()-render_started)
+                    rate=(done/elapsed) if elapsed>0 else 0.0
+                    remaining=max(0,total_to_render-done)
+                    eta=(remaining/rate) if rate>0 else 0.0
+                    progress_note=f'{profile["mode"]}: rendering {done}/{total_to_render} • accepted {visible} • rejected {rejected} • failed {failed} • elapsed {elapsed/60:.1f}m • ETA {eta/60:.1f}m'
+                    update_cycle(cycle_id,rendered=rendered,visible=visible,rejected=rejected,failed=failed,estimated_cost_usd=EST_TEXT_CYCLE_COST_USD+rendered*EST_IMAGE_COST_USD,note=progress_note)
+                    _log(f'rendering progress {done}/{total_to_render}; accepted={visible}; rejected={rejected}; failed={failed}; elapsed={elapsed/60:.1f}m; eta={eta/60:.1f}m',cycle_id,stage)
+            elapsed=max(0.0,time.monotonic()-render_started)
+            update_cycle(cycle_id,status='completed',stage='complete',finished_at=now_iso(),rendered=rendered,visible=visible,rejected=rejected,failed=failed,note=f'Cycle completed successfully in {profile["mode"]} mode; {rendered}/{total_to_render} rendered in {elapsed/60:.1f}m; accepted={visible}; rejected={rejected}; failed={failed}.')
+            _log(f'rendering complete: rendered={rendered}/{total_to_render}; accepted={visible}; rejected={rejected}; failed={failed}; elapsed={elapsed/60:.1f}m',cycle_id,'complete')
             return cycle_id
         except Exception as e:
             _fail_cycle(cycle_id,stage,e); return cycle_id

@@ -1,9 +1,10 @@
 import os, json
 import streamlit as st
 from config import *
-from db import init_db, query, one, execute, today_spend, get_setting, get_int_setting, get_bool_setting, set_setting, active_cycle, mark_stale_running_cycles
+from db import init_db, query, one, execute, today_spend, get_setting, get_int_setting, get_bool_setting, set_setting, active_cycle, mark_stale_running_cycles, add_feedback
 from safety import system_health
 from pipeline import run_cycle
+import re
 
 st.set_page_config(page_title='Trend2Sketch Advanced Studio', page_icon='💎', layout='wide')
 init_db()
@@ -36,14 +37,14 @@ except Exception:
     selected_lanes=['Diamond','South Indian Gemstone']
 
 st.title('💎 Trend2Sketch Advanced Studio')
-st.caption('Autonomous jewellery intelligence • Dynamic South Indian + Diamond discovery • Parallel Discover → Parallel Score → Render → Visually score → Filter')
+st.caption('Product Intelligence • Design DNA → deep R&D → stone/weight engineering → novelty gate → CAD handoff → owner learning')
 
 with st.expander('🎛️ Live Studio Controls — no redeployment needed', expanded=True):
     c1,c2,c3,c4=st.columns(4)
     new_threshold=c1.slider('Quality acceptance score',75,100,quality_threshold,help='Change this anytime. Designs at or above this final score become accepted in the library.')
     new_cap=c2.slider('Number of designs to generate per cycle',1,100,render_cap,step=1,help='Choose the exact number of jewellery designs the system should attempt to generate in each cycle. Change this anytime without redeploying.')
     new_auto=c3.toggle('Autonomous cycles enabled',value=auto_enabled,help='Turn background scheduled generation on/off without changing Render or GitHub.')
-    new_speed=c4.selectbox('Worker speed', ['Fast','Balanced','Deep'], index=['Fast','Balanced','Deep'].index(speed_mode), help='Fast uses a smaller adaptive pool + more parallel calls. Balanced is recommended. Deep uses the largest research pool.')
+    new_speed=c4.selectbox('Worker speed', ['Fast','Balanced','Deep'], index=['Fast','Balanced','Deep'].index(speed_mode), help='Deep is now Design Director R&D mode: three research lenses, synthesis, a larger concept pool, CAD-actionable briefs and stricter product-development scoring.')
     changed = (new_threshold != quality_threshold) or (new_cap != render_cap) or (new_auto != auto_enabled) or (new_speed != speed_mode)
     if changed:
         set_setting('quality_threshold', new_threshold)
@@ -95,6 +96,37 @@ with st.expander('🎛️ Live Studio Controls — no redeployment needed', expa
         execute('UPDATE designs SET visible=CASE WHEN final_score>=95 THEN 1 ELSE 0 END WHERE final_score IS NOT NULL')
         st.rerun()
 
+# Product Intelligence controls — persistent, no redeployment needed.
+st.subheader('🧬 Product Intelligence')
+pi1,pi2,pi3=st.columns(3)
+target_weight=pi1.text_input('Target gold-weight range',value=get_setting('target_weight_range','Auto'),placeholder='Example: 35–45 g')
+stone_strategy=pi2.text_input('Stone strategy',value=get_setting('stone_strategy','Auto'),placeholder='Example: Emerald dominant, ruby accents')
+commercial_market=pi3.text_input('Target market / customer',value=get_setting('commercial_market','South India retail'),placeholder='Example: Hyderabad bridal retailers')
+novelty_gate=st.slider('Novelty / repetition gate',35,95,get_int_setting('novelty_gate',72),help='Higher = stricter rejection of concepts similar to previous Trend2Sketch designs.')
+if (target_weight!=get_setting('target_weight_range','Auto') or stone_strategy!=get_setting('stone_strategy','Auto') or commercial_market!=get_setting('commercial_market','South India retail') or novelty_gate!=get_int_setting('novelty_gate',72)):
+    set_setting('target_weight_range',target_weight); set_setting('stone_strategy',stone_strategy); set_setting('commercial_market',commercial_market); set_setting('novelty_gate',novelty_gate)
+    st.success('Product engineering targets saved for the next cycle.')
+
+with st.expander('⭐ My Design DNA — gold-standard reference library',expanded=False):
+    st.caption('Upload designs you consider excellent. Add what you like about each piece. Deep mode learns the design direction; it is instructed not to copy the specific piece.')
+    ref_file=st.file_uploader('Add reference design',type=['png','jpg','jpeg','webp'])
+    ref_note=st.text_area('What should the system learn from this design?',placeholder='Example: strong emerald hierarchy, compact peacock rhythm, lightweight negative space, commercial bridal proportion')
+    if st.button('Save to Design DNA',disabled=ref_file is None):
+        ref_dir=os.path.join(DATA_DIR,'references'); os.makedirs(ref_dir,exist_ok=True)
+        safe=re.sub(r'[^A-Za-z0-9._-]+','_',ref_file.name); path=os.path.join(ref_dir,f'{int(__import__("time").time())}_{safe}')
+        with open(path,'wb') as f: f.write(ref_file.getbuffer())
+        execute('INSERT INTO design_references(created_at,name,image_path,note,active) VALUES(?,?,?,?,1)',(__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),ref_file.name,path,ref_note))
+        st.success('Added to My Design DNA. It will influence future Deep research.')
+    refs=query('SELECT * FROM design_references WHERE active=1 ORDER BY id DESC LIMIT 12')
+    if refs:
+        rc=st.columns(4)
+        for i,r in enumerate(refs):
+            with rc[i%4]:
+                if r.get('image_path') and os.path.exists(r['image_path']): st.image(r['image_path'],width='stretch')
+                st.caption((r.get('note') or r.get('name') or '')[:180])
+                if st.button('Remove',key=f'ref_remove_{r["id"]}'):
+                    execute('UPDATE design_references SET active=0 WHERE id=?',(r['id'],)); st.rerun()
+
 latest=one('SELECT * FROM cycles ORDER BY id DESC LIMIT 1') or {}
 h=system_health(); spend=today_spend()
 
@@ -128,6 +160,16 @@ with st.expander('System health', expanded=False):
 active = active_cycle()
 if active:
     st.info(f"🟢 System is already working on cycle #{active.get('id')} — stage: {active.get('stage','working')}. A second cycle will not be started.")
+    if active.get('stage') == 'rendering':
+        note = active.get('note') or ''
+        m = re.search(r'rendering\s+(\d+)/(\d+)', note, re.I)
+        if m:
+            done,total = int(m.group(1)), max(1,int(m.group(2)))
+            st.progress(min(1.0, done/total), text=f'🎨 Rendering progress: {done}/{total}')
+            st.caption(note)
+        else:
+            st.progress(0.0, text='🎨 Rendering started…')
+            st.caption(note or 'Waiting for first rendered design.')
 
 if st.button('Generate one trial cycle now', type='primary', disabled=bool(active)):
     with st.spinner('Running one protected cycle. Automatic retries and single-cycle lock are active...'):
@@ -161,8 +203,26 @@ else:
                 st.caption(f"{r.get('lane','')} • {r.get('category','')} • {r.get('concept_family','')}")
                 st.write(r.get('description',''))
                 st.caption(f"Concept score {float(r.get('pre_score') or 0):.0f} • Visual score {float(r.get('visual_score') or 0):.0f}")
-                if st.button('⭐ Favourite',key=f"fav{r['id']}"):
-                    execute('UPDATE designs SET favorite=1 WHERE id=?',(r['id'],)); st.toast('Saved as favourite')
+                if r.get('cad_brief'):
+                    with st.expander('📐 CAD handoff sheet'):
+                        try: brief=json.loads(r.get('cad_brief') or '{}')
+                        except Exception: brief={}
+                        st.write(f"**Target weight:** {r.get('target_weight') or '—'}")
+                        for label,key in [('Dimensions','dimensions'),('Stone hierarchy','stone_hierarchy'),('Stone shapes / sizes','stone_shapes_sizes'),('Setting strategy','setting_strategy'),('Construction','construction'),('Articulation','articulation'),('Comfort','comfort_notes'),('Lightweighting','lightweighting_strategy'),('Manufacturability','manufacturability_rationale')]:
+                            if brief.get(key): st.write(f"**{label}:** {brief.get(key)}")
+
+                fb1,fb2,fb3=st.columns(3)
+                if fb1.button('❤️ Excellent',key=f"excellent{r['id']}"):
+                    execute('UPDATE designs SET favorite=1 WHERE id=?',(r['id'],)); add_feedback(r['id'],'excellent','Approved as gold-standard direction'); st.toast('Excellent — this direction will influence future Deep research.')
+                if fb2.button('✓ Usable',key=f"usable{r['id']}"):
+                    add_feedback(r['id'],'usable','Commercially usable'); st.toast('Usable feedback saved.')
+                if fb3.button('✕ Reject',key=f"reject{r['id']}"):
+                    st.session_state[f"reject_open_{r['id']}"]=True
+                if st.session_state.get(f"reject_open_{r['id']}",False):
+                    reason=st.selectbox('Why reject?', ['Too generic','Not South Indian enough','Poor stone dominance','Bad proportions','Too heavy','Too light/plain','Not manufacturable','Too repetitive','Not commercial','Wrong category','Other'],key=f"reason{r['id']}")
+                    note=st.text_input('Optional note',key=f"note{r['id']}")
+                    if st.button('Save rejection',key=f"save_reject{r['id']}"):
+                        add_feedback(r['id'],'reject',reason,note); st.session_state[f"reject_open_{r['id']}"]=False; st.toast('Rejection saved. Deep mode will use this feedback.'); st.rerun()
 
 st.subheader('Score Calibration Lab')
 st.caption('Use this to compare 75–100 rated output side by side before deciding your permanent production threshold. Changing the Review floor costs nothing and requires no regeneration.')
@@ -181,4 +241,4 @@ st.subheader('Recent autonomous cycles')
 cycles=query('SELECT id,started_at,status,stage,concepts_discovered,candidates_scored,rendered,visible,rejected,failed,estimated_cost_usd,note FROM cycles ORDER BY id DESC LIMIT 12')
 st.dataframe(cycles,width='stretch',hide_index=True)
 
-st.caption('Scores are Trend2Sketch internal design-intelligence scores, not guaranteed sales probabilities. Public trend research is used for inspiration; branded products must not be copied.')
+st.caption('Deep mode is Design Director R&D: multi-agent public research + CAD-actionable product briefs + owner feedback. Scores are internal design-intelligence scores, not guaranteed sales probabilities. Public trend research is used for inspiration; branded products must not be copied.')
