@@ -1,7 +1,7 @@
 import os, json
 import streamlit as st
 from config import *
-from db import init_db, query, one, execute, today_spend, get_setting, get_int_setting, get_bool_setting, set_setting, active_cycle, mark_stale_running_cycles, add_feedback
+from db import init_db, query, one, execute, today_spend, get_setting, get_int_setting, get_bool_setting, set_setting, active_cycle, mark_stale_running_cycles, add_feedback, repair_rejection_integrity
 from safety import system_health
 from pipeline import run_cycle
 from intelligence import analyze_reference_image
@@ -9,6 +9,7 @@ import re
 
 st.set_page_config(page_title='Trend2Sketch Advanced Studio', page_icon='💎', layout='wide')
 init_db()
+repaired_rejections=repair_rejection_integrity()
 mark_stale_running_cycles(CYCLE_STALE_MINUTES)
 
 if APP_PASSWORD:
@@ -53,7 +54,7 @@ with st.expander('🎛️ Live Studio Controls — no redeployment needed', expa
         set_setting('auto_enabled', '1' if new_auto else '0')
         set_setting('speed_mode', new_speed)
         # Reclassify already-rendered designs immediately. No API call or regeneration required.
-        execute('UPDATE designs SET visible=CASE WHEN final_score>=? THEN 1 ELSE 0 END WHERE final_score IS NOT NULL',(new_threshold,))
+        execute('''UPDATE designs SET visible=CASE WHEN final_score>=? AND COALESCE(status,'')<>'owner_rejected' AND NOT EXISTS (SELECT 1 FROM design_feedback f WHERE f.design_id=designs.id AND lower(trim(f.verdict))='reject') THEN 1 ELSE 0 END WHERE final_score IS NOT NULL''',(new_threshold,))
         st.success('Saved instantly. These settings persist after closing the browser and after normal app restarts.')
         quality_threshold,render_cap,auto_enabled,speed_mode=new_threshold,new_cap,new_auto,new_speed
 
@@ -86,15 +87,15 @@ with st.expander('🎛️ Live Studio Controls — no redeployment needed', expa
     preset_cols=st.columns(3)
     if preset_cols[0].button('🧪 Trial preset: 75 / 10'):
         set_setting('quality_threshold',75); set_setting('render_cap',10); set_setting('auto_enabled','1')
-        execute('UPDATE designs SET visible=CASE WHEN final_score>=75 THEN 1 ELSE 0 END WHERE final_score IS NOT NULL')
+        execute("""UPDATE designs SET visible=CASE WHEN final_score>=75 AND COALESCE(status,'')<>'owner_rejected' AND NOT EXISTS (SELECT 1 FROM design_feedback f WHERE f.design_id=designs.id AND lower(trim(f.verdict))='reject') THEN 1 ELSE 0 END WHERE final_score IS NOT NULL""")
         st.rerun()
     if preset_cols[1].button('⚖️ Review preset: 85 / 30'):
         set_setting('quality_threshold',85); set_setting('render_cap',30); set_setting('auto_enabled','1')
-        execute('UPDATE designs SET visible=CASE WHEN final_score>=85 THEN 1 ELSE 0 END WHERE final_score IS NOT NULL')
+        execute("""UPDATE designs SET visible=CASE WHEN final_score>=85 AND COALESCE(status,'')<>'owner_rejected' AND NOT EXISTS (SELECT 1 FROM design_feedback f WHERE f.design_id=designs.id AND lower(trim(f.verdict))='reject') THEN 1 ELSE 0 END WHERE final_score IS NOT NULL""")
         st.rerun()
     if preset_cols[2].button('🏆 Production preset: 95 / 100'):
         set_setting('quality_threshold',95); set_setting('render_cap',100); set_setting('auto_enabled','1')
-        execute('UPDATE designs SET visible=CASE WHEN final_score>=95 THEN 1 ELSE 0 END WHERE final_score IS NOT NULL')
+        execute("""UPDATE designs SET visible=CASE WHEN final_score>=95 AND COALESCE(status,'')<>'owner_rejected' AND NOT EXISTS (SELECT 1 FROM design_feedback f WHERE f.design_id=designs.id AND lower(trim(f.verdict))='reject') THEN 1 ELSE 0 END WHERE final_score IS NOT NULL""")
         st.rerun()
 
 # Product Intelligence controls — persistent, no redeployment needed.
@@ -201,12 +202,15 @@ if st.button('Generate one trial cycle now', type='primary', disabled=bool(activ
         st.info('No new cycle was started because another cycle was already active.')
     st.rerun()
 
+if repaired_rejections:
+    st.caption(f'🛡️ Library self-audit repaired {repaired_rejections} previously rejected design(s) and kept them hidden.')
+
 st.subheader(f'Accepted Design Library — {quality_threshold}+ Final Score')
 filters=st.columns(3)
 lane=filters[0].selectbox('Lane',['All','Diamond','South Indian Gemstone'])
 review_floor=filters[1].slider('Review floor',75,100,quality_threshold,help='This is only a viewing filter; it does not change your saved acceptance score.')
 limit=filters[2].selectbox('Show',['30','60','120'],index=0)
-params=[review_floor]; where='final_score>=? AND image_path IS NOT NULL AND COALESCE(visible,0)=1'
+params=[review_floor]; where="final_score>=? AND image_path IS NOT NULL AND COALESCE(visible,0)=1 AND COALESCE(status,'')<>'owner_rejected' AND NOT EXISTS (SELECT 1 FROM design_feedback f WHERE f.design_id=designs.id AND lower(trim(f.verdict))='reject')"
 if lane!='All': where+=' AND lane=?'; params.append(lane)
 rows=query(f'SELECT * FROM designs WHERE {where} ORDER BY final_score DESC, id DESC LIMIT ?',tuple(params+[int(limit)]))
 if not rows:
@@ -243,7 +247,7 @@ else:
                     reason=st.selectbox('Why reject?', ['Too generic','Not South Indian enough','Poor stone dominance','Bad proportions','Too heavy','Too light/plain','Not manufacturable','Too repetitive','Not commercial','Wrong category','Other'],key=f"reason{r['id']}")
                     note=st.text_input('Optional note',key=f"note{r['id']}")
                     if st.button('Save rejection',key=f"save_reject{r['id']}"):
-                        add_feedback(r['id'],'reject',reason,note); execute("UPDATE designs SET visible=0, favorite=0, status='owner_rejected' WHERE id=?",(r['id'],)); st.session_state[f"reject_open_{r['id']}"]=False; st.toast('Rejected design removed from the library. Deep mode will still learn from your feedback.'); st.rerun()
+                        add_feedback(r['id'],'reject',reason,note); st.session_state[f"reject_open_{r['id']}"]=False; st.toast('Rejected permanently: removed from every visible library, retained only for negative learning.'); st.rerun()
 
 st.subheader('Score Calibration Lab')
 st.caption('Use this to compare 75–100 rated output side by side before deciding your permanent production threshold. Changing the Review floor costs nothing and requires no regeneration.')
@@ -253,7 +257,7 @@ SUM(CASE WHEN final_score>=80 AND final_score<85 THEN 1 ELSE 0 END) AS s80_84,
 SUM(CASE WHEN final_score>=85 AND final_score<90 THEN 1 ELSE 0 END) AS s85_89,
 SUM(CASE WHEN final_score>=90 AND final_score<95 THEN 1 ELSE 0 END) AS s90_94,
 SUM(CASE WHEN final_score>=95 THEN 1 ELSE 0 END) AS s95_100
-FROM designs WHERE image_path IS NOT NULL AND COALESCE(visible,0)=1''')
+FROM designs WHERE image_path IS NOT NULL AND COALESCE(visible,0)=1 AND COALESCE(status,'')<>'owner_rejected' AND NOT EXISTS (SELECT 1 FROM design_feedback f WHERE f.design_id=designs.id AND lower(trim(f.verdict))='reject')''')
 if bands:
     b=bands[0]; bc=st.columns(5)
     bc[0].metric('75–79',b.get('s75_79') or 0); bc[1].metric('80–84',b.get('s80_84') or 0); bc[2].metric('85–89',b.get('s85_89') or 0); bc[3].metric('90–94',b.get('s90_94') or 0); bc[4].metric('95–100',b.get('s95_100') or 0)

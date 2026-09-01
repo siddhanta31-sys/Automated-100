@@ -127,6 +127,63 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    # Rejection integrity: an owner-rejected design is permanently hidden from all visible libraries.
+    # Triggers are deliberately database-level so a UI setting change cannot resurrect it.
+    c.executescript('''
+    CREATE TRIGGER IF NOT EXISTS trg_feedback_reject_hides_design
+    AFTER INSERT ON design_feedback
+    WHEN lower(trim(NEW.verdict)) = 'reject'
+    BEGIN
+      UPDATE designs
+      SET visible=0, favorite=0, status='owner_rejected'
+      WHERE id=NEW.design_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_rejected_design_cannot_be_resurrected
+    AFTER UPDATE OF visible, favorite, status ON designs
+    WHEN EXISTS (
+      SELECT 1 FROM design_feedback f
+      WHERE f.design_id=NEW.id AND lower(trim(f.verdict))='reject'
+    ) AND (
+      COALESCE(NEW.visible,0)<>0 OR COALESCE(NEW.favorite,0)<>0 OR COALESCE(NEW.status,'')<>'owner_rejected'
+    )
+    BEGIN
+      UPDATE designs
+      SET visible=0, favorite=0, status='owner_rejected'
+      WHERE id=NEW.id;
+    END;
+    ''')
+    c.commit()
+    repair_rejection_integrity()
+
+def repair_rejection_integrity():
+    """Self-audit and repair contradictory historical records.
+
+    Any design that has ever received an owner 'reject' verdict is terminally hidden.
+    The feedback row remains for negative learning, but the design can never re-enter
+    an accepted/review library because a threshold or preset changed.
+    """
+    c = conn()
+    cur = c.execute('''
+        UPDATE designs
+        SET visible=0, favorite=0, status='owner_rejected'
+        WHERE EXISTS (
+          SELECT 1 FROM design_feedback f
+          WHERE f.design_id=designs.id AND lower(trim(f.verdict))='reject'
+        )
+          AND (
+            COALESCE(visible,0)<>0 OR COALESCE(favorite,0)<>0 OR COALESCE(status,'')<>'owner_rejected'
+          )
+    ''')
+    c.commit()
+    return cur.rowcount
+
+
+def is_owner_rejected(design_id):
+    return one('''SELECT 1 AS yes FROM design_feedback
+                  WHERE design_id=? AND lower(trim(verdict))='reject' LIMIT 1''', (int(design_id),)) is not None
+
+
 def execute(sql, params=()):
     c = conn(); cur = c.execute(sql, params); c.commit(); return cur
 
@@ -202,8 +259,17 @@ def feedback_summary(limit=250):
     return rows
 
 def add_feedback(design_id, verdict, reason='', note=''):
-    execute('INSERT INTO design_feedback(design_id,created_at,verdict,reason,note) VALUES(?,?,?,?,?)',
-            (int(design_id),now_iso(),str(verdict),str(reason or ''),str(note or '')))
+    """Persist owner feedback atomically. Reject is a terminal visibility decision."""
+    did=int(design_id); v=str(verdict or '').strip().lower(); c=conn()
+    try:
+        c.execute('BEGIN IMMEDIATE')
+        c.execute('INSERT INTO design_feedback(design_id,created_at,verdict,reason,note) VALUES(?,?,?,?,?)',
+                  (did,now_iso(),v,str(reason or ''),str(note or '')))
+        if v=='reject':
+            c.execute("UPDATE designs SET visible=0, favorite=0, status='owner_rejected' WHERE id=?",(did,))
+        c.commit()
+    except Exception:
+        c.rollback(); raise
 
 
 def reference_summary(limit=60):
