@@ -103,7 +103,7 @@ def _concept_batch(research,need,batch_no,selected_categories,selected_lanes):
 Create exactly {need} ORIGINAL jewellery design concepts. This is parallel creative batch {batch_no}; deliberately explore different architectures and motifs from other batches.
 {cats}\n{lanes}
 Spread the batch across allowed categories and lanes. Do not recreate a known branded SKU. Every concept must be a CAD-actionable PRODUCT BRIEF, not a vague visual idea. Specify a distinct architecture and credible construction. Avoid generic 'floral luxury necklace' language.\nReturn ONLY a JSON array. Each item: lane, category, concept_family, title, description, materials, target_weight, region_signal, dimensions, stone_hierarchy, stone_shapes_sizes, setting_strategy, construction, articulation, comfort_notes, lightweighting_strategy, commercial_rationale, originality_rationale, manufacturability_rationale.'''
-    items=_retry(f'concept batch {batch_no}',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,input=prompt))))
+    items=_retry(f'concept batch {batch_no}',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,input=prompt))), retries=2)
     if isinstance(items,dict): items=items.get('concepts',[])
     if not isinstance(items,list): return []
     valid=[]
@@ -117,10 +117,32 @@ Spread the batch across allowed categories and lanes. Do not recreate a known br
         valid.append(item)
     return valid[:need]
 
+def _concept_batch_resilient(research,need,batch_no,selected_categories,selected_lanes):
+    """Timeout-resilient concept generation. Large failed jobs split into smaller checkpoints."""
+    try:
+        return _concept_batch(research,need,batch_no,selected_categories,selected_lanes)
+    except Exception as e:
+        if need <= 3:
+            raise
+        left=max(2,need//2); right=need-left
+        _log(f'concept batch {batch_no}: {type(e).__name__}; splitting {need} into {left}+{right}')
+        out=[]
+        for suffix,n in (("a",left),("b",right)):
+            if n<=0: continue
+            try:
+                part=_concept_batch(research,n,f'{batch_no}{suffix}',selected_categories,selected_lanes)
+                out.extend(part)
+                _log(f'concept batch {batch_no}{suffix}: checkpoint saved {len(part)}')
+            except Exception as sub:
+                _log(f'concept batch {batch_no}{suffix} failed: {type(sub).__name__}: {sub}')
+        if not out:
+            raise e
+        return out[:need]
+
 def generate_concepts(research:Dict,total:int,selected_categories=None,selected_lanes=None,workers=3,batch_size=25,progress_callback=None)->List[Dict]:
     '''Parallel concept discovery. Independent batches run concurrently; failures are retried/fallback-filled.'''
     _require_client(); selected_categories=selected_categories or []; selected_lanes=selected_lanes or ['Diamond','South Indian Gemstone']
-    total=max(1,int(total)); batch_size=max(10,min(40,int(batch_size))); workers=max(1,min(5,int(workers)))
+    total=max(1,int(total)); batch_size=max(5,min(20,int(batch_size))); workers=max(1,min(5,int(workers)))
     needs=[]; left=total; n=0
     while left>0:
         n+=1; need=min(batch_size,left); needs.append((n,need)); left-=need
@@ -136,7 +158,7 @@ def generate_concepts(research:Dict,total:int,selected_categories=None,selected_
             if len(all_items)>=total: break
         return added
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs={ex.submit(_concept_batch,research,need,bno,selected_categories,selected_lanes):(bno,need) for bno,need in needs}
+        futs={ex.submit(_concept_batch_resilient,research,need,bno,selected_categories,selected_lanes):(bno,need) for bno,need in needs}
         for fut in as_completed(futs):
             bno,need=futs[fut]
             try:
@@ -149,7 +171,7 @@ def generate_concepts(research:Dict,total:int,selected_categories=None,selected_
     fill_no=len(needs)+1; attempts=0
     while len(all_items)<total and attempts<3:
         attempts+=1; need=min(batch_size,total-len(all_items))
-        try: add(_concept_batch(research,need,fill_no,selected_categories,selected_lanes))
+        try: add(_concept_batch_resilient(research,need,fill_no,selected_categories,selected_lanes))
         except Exception as e: _log(f'fill batch failed: {type(e).__name__}: {e}')
         fill_no+=1
         if progress_callback:

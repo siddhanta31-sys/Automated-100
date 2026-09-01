@@ -44,7 +44,7 @@ def _speed_profile(mode,render_cap):
     if mode=='Fast':
         pool=min(180,max(60,render_cap*2+40)); return dict(mode=mode,pool=pool,batch=20,concept_workers=FAST_CONCEPT_WORKERS,score_workers=FAST_SCORE_WORKERS,cache_minutes=360)
     if mode=='Deep':
-        return dict(mode=mode,pool=max(CONCEPT_POOL_SIZE,min(600,render_cap*DEEP_RENDER_POOL_MULTIPLIER)),batch=40,concept_workers=DEEP_CONCEPT_WORKERS,score_workers=DEEP_SCORE_WORKERS,cache_minutes=0)
+        return dict(mode=mode,pool=max(CONCEPT_POOL_SIZE,min(600,render_cap*DEEP_RENDER_POOL_MULTIPLIER)),batch=8,concept_workers=min(3,max(2,DEEP_CONCEPT_WORKERS)),score_workers=DEEP_SCORE_WORKERS,cache_minutes=0)
     pool=min(CONCEPT_POOL_SIZE,max(100,render_cap*3)); return dict(mode=mode,pool=pool,batch=25,concept_workers=BALANCED_CONCEPT_WORKERS,score_workers=BALANCED_SCORE_WORKERS,cache_minutes=120)
 
 def _cached_research(selected_categories,selected_lanes,max_age_minutes):
