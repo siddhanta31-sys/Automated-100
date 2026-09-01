@@ -44,7 +44,7 @@ def _speed_profile(mode,render_cap):
     if mode=='Fast':
         pool=min(180,max(60,render_cap*2+40)); return dict(mode=mode,pool=pool,batch=20,concept_workers=FAST_CONCEPT_WORKERS,score_workers=FAST_SCORE_WORKERS,cache_minutes=360)
     if mode=='Deep':
-        return dict(mode=mode,pool=max(CONCEPT_POOL_SIZE,min(600,render_cap*DEEP_RENDER_POOL_MULTIPLIER)),batch=8,concept_workers=min(3,max(2,DEEP_CONCEPT_WORKERS)),score_workers=DEEP_SCORE_WORKERS,cache_minutes=0)
+        return dict(mode=mode,pool=max(CONCEPT_POOL_SIZE,min(600,render_cap*DEEP_RENDER_POOL_MULTIPLIER)),batch=8,concept_workers=min(3,max(2,DEEP_CONCEPT_WORKERS)),score_workers=DEEP_SCORE_WORKERS,cache_minutes=60)
     pool=min(CONCEPT_POOL_SIZE,max(100,render_cap*3)); return dict(mode=mode,pool=pool,batch=25,concept_workers=BALANCED_CONCEPT_WORKERS,score_workers=BALANCED_SCORE_WORKERS,cache_minutes=120)
 
 def _cached_research(selected_categories,selected_lanes,max_age_minutes):
@@ -101,19 +101,19 @@ def run_cycle(manual=False):
                 _log(f'calling text model {TEXT_MODEL} with automatic retry/fallback',cycle_id,stage)
                 research=research_market(selected_categories=selected_categories, selected_lanes=selected_lanes, deep=(profile['mode']=='Deep'), feedback=feedback_summary(), references=reference_summary(), product_constraints={"target_weight":get_setting("target_weight_range","Auto"), "stone_strategy":get_setting("stone_strategy","Auto"), "commercial_market":get_setting("commercial_market","South India retail"), "novelty_gate":get_int_setting("novelty_gate",72)})
                 meta=json.dumps({'categories':selected_categories,'lanes':selected_lanes,'live_web':True})
-                execute('INSERT INTO research_snapshots(created_at,summary,source_note) VALUES(?,?,?)',(now_iso(),json.dumps(research),meta))
+                execute('INSERT INTO research_snapshots(created_at,summary,source_note) VALUES(?,?,?)',(now_iso(),json.dumps(research),meta)); save_checkpoint(cycle_id,'research',research)
                 log_spend(cycle_id,'research_and_concepts',EST_TEXT_CYCLE_COST_USD,'configured estimate')
 
             stage='concept_discovery'; update_cycle(cycle_id,stage=stage,note=f'{profile["mode"]}: parallel concept discovery 0/{profile["pool"]}')
             def concept_progress(done,total):
                 update_cycle(cycle_id,concepts_discovered=done,note=f'{profile["mode"]}: parallel concept discovery {done}/{total}')
             concepts=generate_concepts(research,profile['pool'],selected_categories=selected_categories,selected_lanes=selected_lanes,workers=profile['concept_workers'],batch_size=profile['batch'],progress_callback=concept_progress)
-            update_cycle(cycle_id,concepts_discovered=len(concepts),stage='scoring',note=f'Parallel discovery complete: {len(concepts)}. Scoring 0/{len(concepts)}')
+            save_checkpoint(cycle_id,'concepts',concepts); update_cycle(cycle_id,concepts_discovered=len(concepts),stage='scoring',note=f'Parallel discovery complete: {len(concepts)}. Scoring 0/{len(concepts)}')
 
             stage='scoring'
             def score_progress(done,total): update_cycle(cycle_id,candidates_scored=done,note=f'{profile["mode"]}: parallel scoring {done}/{total}')
             scored=score_concepts(concepts,workers=profile['score_workers'],progress_callback=score_progress)
-            update_cycle(cycle_id,candidates_scored=len(scored),note=f'Parallel scoring completed: {len(scored)} candidates')
+            save_checkpoint(cycle_id,'scored',scored); update_cycle(cycle_id,candidates_scored=len(scored),note=f'Parallel scoring completed: {len(scored)} candidates')
 
             existing=_existing_texts(); shortlist=[]
             for c in sorted(scored,key=lambda x:x.get('pre_score',0),reverse=True):
@@ -123,7 +123,7 @@ def run_cycle(manual=False):
                 if one('SELECT id FROM designs WHERE fingerprint=?',(fp,)): continue
                 shortlist.append(c); existing.append(' '.join([c.get('title',''),c.get('description',''),c.get('concept_family','')]))
                 if len(shortlist)>=render_cap: break
-            _log(f'ranked shortlist={len(shortlist)}; cap={render_cap}; final gate={quality_threshold}+',cycle_id,'shortlist')
+            save_checkpoint(cycle_id,'shortlist',shortlist); _log(f'ranked shortlist={len(shortlist)}; cap={render_cap}; final gate={quality_threshold}+',cycle_id,'shortlist')
             remaining=max(0,DAILY_API_BUDGET_USD-today_spend()); affordable=int(remaining//max(EST_IMAGE_COST_USD,0.0001)); shortlist=shortlist[:affordable]
             if not shortlist:
                 update_cycle(cycle_id,status='completed',stage='complete',finished_at=now_iso(),note='No novel ranked concepts could be rendered within the remaining daily budget.'); return cycle_id
@@ -164,7 +164,7 @@ def run_cycle(manual=False):
                     eta=(remaining/rate) if rate>0 else 0.0
                     progress_note=f'{profile["mode"]}: rendering {done}/{total_to_render} • accepted {visible} • rejected {rejected} • failed {failed} • elapsed {elapsed/60:.1f}m • ETA {eta/60:.1f}m'
                     update_cycle(cycle_id,rendered=rendered,visible=visible,rejected=rejected,failed=failed,estimated_cost_usd=EST_TEXT_CYCLE_COST_USD+rendered*EST_IMAGE_COST_USD,note=progress_note)
-                    _log(f'rendering progress {done}/{total_to_render}; accepted={visible}; rejected={rejected}; failed={failed}; elapsed={elapsed/60:.1f}m; eta={eta/60:.1f}m',cycle_id,stage)
+                    save_checkpoint(cycle_id,'render_progress',{'done':done,'total':total_to_render,'accepted':visible,'rejected':rejected,'failed':failed}); _log(f'rendering progress {done}/{total_to_render}; accepted={visible}; rejected={rejected}; failed={failed}; elapsed={elapsed/60:.1f}m; eta={eta/60:.1f}m',cycle_id,stage)
             elapsed=max(0.0,time.monotonic()-render_started)
             update_cycle(cycle_id,status='completed',stage='complete',finished_at=now_iso(),rendered=rendered,visible=visible,rejected=rejected,failed=failed,note=f'Cycle completed successfully in {profile["mode"]} mode; {rendered}/{total_to_render} rendered in {elapsed/60:.1f}m; accepted={visible}; rejected={rejected}; failed={failed}.')
             _log(f'rendering complete: rendered={rendered}/{total_to_render}; accepted={visible}; rejected={rejected}; failed={failed}; elapsed={elapsed/60:.1f}m',cycle_id,'complete')

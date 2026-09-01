@@ -48,13 +48,13 @@ services:
       - key: STREAMLIT_SERVER_FILE_WATCHER_TYPE
         value: none
       - key: API_TIMEOUT_SECONDS
-        value: '120'
+        value: '180'
       - key: API_MAX_RETRIES
         value: '3'
       - key: CYCLE_STALE_MINUTES
         value: '75'
       - key: CONCEPT_BATCH_SIZE
-        value: '40'
+        value: '8'
       - key: CONCEPT_MAX_BATCHES
         value: '15'
       - key: RENDER_RETRIES

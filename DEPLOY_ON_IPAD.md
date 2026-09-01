@@ -9,3 +9,9 @@
 7. Open the new Render URL in Safari. Share → Add to Home Screen.
 
 The default Studio settings explore 300 concepts every 30 minutes, render at most 30 high-scoring candidates, and show only final scores of 95+.
+
+
+## Foolproof Design OS update
+Upload this build only after stopping/finishing a healthy current cycle. A genuinely stuck/timeout cycle may be interrupted. Keep the existing Render persistent disk and environment secrets. Do not delete the disk: it contains your design library, feedback and Design DNA.
+
+After deployment, open My Design DNA, select/create a profile, upload 10-20 strong approved designs, and use Analyze & save. First production-learning test: Deep / 10 designs / threshold 75.

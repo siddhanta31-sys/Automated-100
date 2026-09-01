@@ -4,6 +4,7 @@ from config import *
 from db import init_db, query, one, execute, today_spend, get_setting, get_int_setting, get_bool_setting, set_setting, active_cycle, mark_stale_running_cycles, add_feedback
 from safety import system_health
 from pipeline import run_cycle
+from intelligence import analyze_reference_image
 import re
 
 st.set_page_config(page_title='Trend2Sketch Advanced Studio', page_icon='💎', layout='wide')
@@ -107,23 +108,43 @@ if (target_weight!=get_setting('target_weight_range','Auto') or stone_strategy!=
     set_setting('target_weight_range',target_weight); set_setting('stone_strategy',stone_strategy); set_setting('commercial_market',commercial_market); set_setting('novelty_gate',novelty_gate)
     st.success('Product engineering targets saved for the next cycle.')
 
-with st.expander('⭐ My Design DNA — gold-standard reference library',expanded=False):
-    st.caption('Upload designs you consider excellent. Add what you like about each piece. Deep mode learns the design direction; it is instructed not to copy the specific piece.')
+with st.expander('⭐ My Design DNA — gold-standard learning library',expanded=False):
+    st.caption('Upload designs you consider excellent. Trend2Sketch automatically analyzes the image itself plus your note, learns the abstract design language, and never asks the model to copy the exact piece.')
+    existing_profiles=[r['profile_name'] for r in query("SELECT DISTINCT COALESCE(profile_name,'General') AS profile_name FROM design_references WHERE active=1") if r.get('profile_name')]
+    default_profiles=['General','South Indian Bridal','Lightweight South Indian','Diamond Everyday','Diamond Bridal']
+    profiles=[]
+    for x in default_profiles+existing_profiles:
+        if x not in profiles: profiles.append(x)
+    profile_name=st.selectbox('Design DNA profile',profiles+['+ New profile'])
+    if profile_name=='+ New profile':
+        profile_name=st.text_input('New profile name',placeholder='Example: Hyderabad Emerald Bridal') or 'General'
     ref_file=st.file_uploader('Add reference design',type=['png','jpg','jpeg','webp'])
-    ref_note=st.text_area('What should the system learn from this design?',placeholder='Example: strong emerald hierarchy, compact peacock rhythm, lightweight negative space, commercial bridal proportion')
-    if st.button('Save to Design DNA',disabled=ref_file is None):
+    ref_note=st.text_area('What should the system learn from this design?',placeholder='Optional — image analysis is automatic. Example: strong emerald hierarchy, compact peacock rhythm, commercial bridal proportion')
+    if st.button('Analyze & save to Design DNA',disabled=ref_file is None):
         ref_dir=os.path.join(DATA_DIR,'references'); os.makedirs(ref_dir,exist_ok=True)
         safe=re.sub(r'[^A-Za-z0-9._-]+','_',ref_file.name); path=os.path.join(ref_dir,f'{int(__import__("time").time())}_{safe}')
         with open(path,'wb') as f: f.write(ref_file.getbuffer())
-        execute('INSERT INTO design_references(created_at,name,image_path,note,active) VALUES(?,?,?,?,1)',(__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),ref_file.name,path,ref_note))
-        st.success('Added to My Design DNA. It will influence future Deep research.')
-    refs=query('SELECT * FROM design_references WHERE active=1 ORDER BY id DESC LIMIT 12')
+        rid=execute('INSERT INTO design_references(created_at,name,image_path,note,active,profile_name,analysis_status) VALUES(?,?,?,?,1,?,?)',(__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),ref_file.name,path,ref_note,profile_name,'analyzing')).lastrowid
+        try:
+            with st.spinner('Analyzing silhouette, motifs, stone hierarchy, settings, weight philosophy and manufacturability…'):
+                dna=analyze_reference_image(path,ref_note,profile_name)
+            execute('UPDATE design_references SET dna_json=?, analysis_status=? WHERE id=?',(json.dumps(dna,ensure_ascii=False),'ready',rid))
+            st.success('Design learned successfully. Its Design DNA will influence future Deep cycles.')
+        except Exception as e:
+            execute('UPDATE design_references SET analysis_status=? WHERE id=?',('analysis_failed',rid))
+            st.warning(f'Reference saved safely, but automatic analysis could not finish: {type(e).__name__}. You can keep working; your note will still be used.')
+    refs=query('SELECT * FROM design_references WHERE active=1 ORDER BY id DESC LIMIT 20')
     if refs:
         rc=st.columns(4)
         for i,r in enumerate(refs):
             with rc[i%4]:
                 if r.get('image_path') and os.path.exists(r['image_path']): st.image(r['image_path'],width='stretch')
-                st.caption((r.get('note') or r.get('name') or '')[:180])
+                st.caption(f"{r.get('profile_name') or 'General'} • {r.get('analysis_status') or 'pending'}")
+                if r.get('dna_json'):
+                    try:
+                        dna=json.loads(r['dna_json']); st.caption('Learned: '+str(dna.get('generation_directives') or dna.get('distinctive_traits') or '')[:220])
+                    except Exception: pass
+                elif r.get('note'): st.caption((r.get('note') or '')[:180])
                 if st.button('Remove',key=f'ref_remove_{r["id"]}'):
                     execute('UPDATE design_references SET active=0 WHERE id=?',(r['id'],)); st.rerun()
 
@@ -153,7 +174,7 @@ with st.expander('System health', expanded=False):
     active_now=active_cycle()
     health_label='WORKING' if active_now else ('HEALTHY' if h['ok'] else 'ATTENTION REQUIRED')
     c[3].metric('Health', health_label)
-    st.write(f'Single-cycle lock: ON • Parallel pipeline: ON • Research cache: ON • Auto retry: ON • API timeout: {API_TIMEOUT_SECONDS:.0f}s')
+    st.write(f'Single-cycle lock: ON • Self-restarting worker: ON • Heartbeat recovery: ON • Checkpoints: ON • Parallel pipeline: ON • Research cache: ON • Auto retry: ON • API timeout: {API_TIMEOUT_SECONDS:.0f}s')
     st.write(f'Automatic interval: {AUTO_INTERVAL_MINUTES} min • Worker speed: {speed_mode} • Adaptive concept pool: ON • Current render cap: {render_cap} • Pre-render floor: {PRE_RENDER_MIN_SCORE:.0f} • Acceptance threshold: {quality_threshold} • Autonomous: {"ON" if auto_enabled else "PAUSED"}')
     st.write('Active lanes: ' + ', '.join(selected_lanes) + ' • Categories: ' + (', '.join(selected_categories) if selected_categories else 'AUTO-DISCOVER'))
 
@@ -241,4 +262,4 @@ st.subheader('Recent autonomous cycles')
 cycles=query('SELECT id,started_at,status,stage,concepts_discovered,candidates_scored,rendered,visible,rejected,failed,estimated_cost_usd,note FROM cycles ORDER BY id DESC LIMIT 12')
 st.dataframe(cycles,width='stretch',hide_index=True)
 
-st.caption('Deep mode is Design Director R&D: multi-agent public research + CAD-actionable product briefs + owner feedback. Scores are internal design-intelligence scores, not guaranteed sales probabilities. Public trend research is used for inspiration; branded products must not be copied.')
+st.caption('Foolproof Design OS: Design DNA image learning + multi-agent Deep R&D + CAD-actionable briefs + owner feedback + crash recovery. Scores are internal design-intelligence scores, not guaranteed sales probabilities. Public trend research is used for inspiration; branded products must not be copied.')

@@ -35,7 +35,8 @@ def init_db():
       rejected INTEGER DEFAULT 0,
       failed INTEGER DEFAULT 0,
       estimated_cost_usd REAL DEFAULT 0,
-      note TEXT
+      note TEXT,
+      heartbeat_at TEXT
     );
     CREATE TABLE IF NOT EXISTS designs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,7 +87,10 @@ def init_db():
       name TEXT,
       image_path TEXT,
       note TEXT,
-      active INTEGER DEFAULT 1
+      active INTEGER DEFAULT 1,
+      profile_name TEXT DEFAULT 'General',
+      dna_json TEXT,
+      analysis_status TEXT DEFAULT 'pending'
     );
     CREATE TABLE IF NOT EXISTS spend_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,6 +103,22 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_designs_visible_score ON designs(visible, final_score DESC);
     CREATE INDEX IF NOT EXISTS idx_designs_created ON designs(created_at DESC);
     ''')
+    c.commit()
+    # Forward-compatible migrations.
+    for sql in [
+        'ALTER TABLE cycles ADD COLUMN heartbeat_at TEXT',
+        "ALTER TABLE design_references ADD COLUMN profile_name TEXT DEFAULT 'General'",
+        'ALTER TABLE design_references ADD COLUMN dna_json TEXT',
+        "ALTER TABLE design_references ADD COLUMN analysis_status TEXT DEFAULT 'pending'",
+    ]:
+        try:
+            c.execute(sql); c.commit()
+        except sqlite3.OperationalError:
+            pass
+    c.execute('''CREATE TABLE IF NOT EXISTS cycle_checkpoints (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, cycle_id INTEGER NOT NULL, created_at TEXT NOT NULL,
+      stage TEXT NOT NULL, payload TEXT, UNIQUE(cycle_id,stage)
+    )''')
     c.commit()
     # Forward-compatible migration for richer CAD handoff data.
     try:
@@ -117,11 +137,12 @@ def one(sql, params=()):
     r = conn().execute(sql, params).fetchone(); return dict(r) if r else None
 
 def create_cycle():
-    cur = execute("INSERT INTO cycles(started_at,status,stage) VALUES(?,?,?)", (now_iso(),'running','research'))
+    ts=now_iso(); cur = execute("INSERT INTO cycles(started_at,status,stage,heartbeat_at) VALUES(?,?,?,?)", (ts,'running','research',ts))
     return cur.lastrowid
 
 def update_cycle(cycle_id, **fields):
-    if not fields: return
+    if not fields: fields={}
+    fields['heartbeat_at']=now_iso()
     sets = ','.join(f'{k}=?' for k in fields)
     execute(f'UPDATE cycles SET {sets} WHERE id=?', tuple(fields.values())+(cycle_id,))
 
@@ -167,7 +188,7 @@ def mark_stale_running_cycles(minutes=75):
         UPDATE cycles
         SET status='interrupted', stage='stale_recovered', finished_at=?, note='Automatically recovered stale cycle.'
         WHERE status='running'
-          AND datetime(started_at) < datetime('now', ?)
+          AND datetime(COALESCE(heartbeat_at,started_at)) < datetime('now', ?)
     """, (now_iso(), f'-{mins} minutes'))
     c.commit()
     return cur.rowcount
@@ -186,4 +207,13 @@ def add_feedback(design_id, verdict, reason='', note=''):
 
 
 def reference_summary(limit=60):
-    return query("SELECT id,name,note,image_path FROM design_references WHERE active=1 ORDER BY id DESC LIMIT ?",(limit,))
+    return query("SELECT id,name,note,profile_name,dna_json,analysis_status FROM design_references WHERE active=1 ORDER BY id DESC LIMIT ?",(limit,))
+
+def save_checkpoint(cycle_id,stage,payload):
+    execute('INSERT INTO cycle_checkpoints(cycle_id,created_at,stage,payload) VALUES(?,?,?,?) ON CONFLICT(cycle_id,stage) DO UPDATE SET created_at=excluded.created_at,payload=excluded.payload',(int(cycle_id),now_iso(),str(stage),json.dumps(payload,ensure_ascii=False)))
+
+def get_checkpoint(cycle_id,stage):
+    r=one('SELECT payload FROM cycle_checkpoints WHERE cycle_id=? AND stage=?',(int(cycle_id),str(stage)))
+    if not r: return None
+    try: return json.loads(r['payload'])
+    except Exception: return None

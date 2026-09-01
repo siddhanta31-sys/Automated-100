@@ -85,6 +85,21 @@ DEEP RESEARCH LENS {i}: {lens}. Use web search broadly. Return JSON with evidenc
 Return ONLY JSON with: trends, discovered_families, subfamilies, opportunities, manufacturing_rules, stone_architecture_rules, regional_grammar, lightweighting_rules, avoid_patterns, concept_seeds, research_depth_note. concept_seeds must be specific product-development directions, not generic adjectives. Never recommend copying a branded SKU."""
     return _retry('deep research synthesis',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,input=synthesis))))
 
+
+def analyze_reference_image(path, note='', profile_name='General'):
+    """Convert an owner-approved reference into reusable design DNA. Never asks model to copy it."""
+    _require_client()
+    import base64, mimetypes
+    mime=mimetypes.guess_type(path)[0] or 'image/png'
+    with open(path,'rb') as f: data=base64.b64encode(f.read()).decode()
+    prompt=f"""Act as a senior jewellery design director and manufacturing engineer. Analyze this OWNER-APPROVED reference only to extract reusable design DNA; never recreate/copy the exact piece.
+Profile: {profile_name}
+Owner note: {note}
+Return ONLY JSON with keys: category, regional_style, silhouette, motif_language, stone_hierarchy, stone_colors, stone_shapes_sizes, setting_language, metal_to_stone_ratio, negative_space, motif_density, symmetry, center_architecture, border_fringe_language, articulation, weight_philosophy, manufacturability_rules, comfort_rules, commercial_character, traditional_modern_balance, distinctive_traits, avoid_copying_features, generation_directives.
+Generation directives should describe abstract preferences that can guide new original designs."""
+    resp=_retry('design DNA image analysis',lambda:client.responses.create(model=VISION_MODEL,input=[{'role':'user','content':[{'type':'input_text','text':prompt},{'type':'input_image','image_url':f'data:{mime};base64,{data}'}]}]),retries=max(2,API_MAX_RETRIES))
+    return _json_from_text(_text(resp))
+
 def _normalize_choice(value,allowed):
     raw=str(value or '').strip()
     if not allowed: return raw
