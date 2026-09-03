@@ -17,7 +17,7 @@ def _retry(label, fn, retries):
     raise last
 
 def build_prompt(c, revision_note=''):
-    return f'''Create a premium jewellery DESIGN SKETCH / clean product concept visualization, not a lifestyle photo.
+    return f'''Create one premium jewellery DISCOVERY SKETCH, not a photograph, render, CAD model, or lifestyle image.
 Original design only; do not copy any branded SKU.
 Lane: {c.get('lane')}
 Category: {c.get('category')}
@@ -34,17 +34,8 @@ Construction: {c.get('construction')}
 Articulation: {c.get('articulation')}
 Comfort: {c.get('comfort_notes')}
 Lightweighting: {c.get('lightweighting_strategy')}
-CAD direction: {c.get('cad_instruction')}
-Approx dimensions: {c.get('dimensions')}
-Stone hierarchy: {c.get('stone_hierarchy')}
-Stone shapes/sizes: {c.get('stone_shapes_sizes')}
-Setting strategy: {c.get('setting_strategy')}
-Construction: {c.get('construction')}
-Articulation: {c.get('articulation')}
-Comfort: {c.get('comfort_notes')}
-Lightweighting: {c.get('lightweighting_strategy')}
-CAD direction: {c.get('cad_instruction')}
-Make this look like a professional jewellery product-development sketch. Preserve the specified architecture exactly enough for a CAD designer to interpret stone hierarchy, approximate stone scale, motif rhythm, joints/articulation, setting strategy, negative space and metal distribution. Avoid fantasy construction, impossible stone placement, excessive decorative noise, and generic AI-jewellery symmetry. White/neutral studio background, centered, high design readability.
+Research sources: {c.get('source_urls')}
+Create a clean front-facing hand-drawn product-development sketch on white paper with crisp dark linework and restrained gemstone colour accents. Show one complete design only. Keep left/right construction coherent, stone shapes countable, links connected and motifs readable. Do not draw dimension text, labels, logos, bodies, models, boxes, rulers or decorative backgrounds. Avoid fantasy construction, floating stones, fused gemstones, impossible settings, excessive noise and generic AI symmetry. The separate specification sheet—not text inside the image—is authoritative.
 {('Revision instruction: ' + revision_note) if revision_note else ''}'''
 
 def render_design(c,cycle_id,idx,revision_note=''):

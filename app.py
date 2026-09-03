@@ -1,13 +1,14 @@
-import os, json
+import os, json, hashlib
 import streamlit as st
 from config import *
-from db import init_db, query, one, execute, today_spend, get_setting, get_int_setting, get_bool_setting, set_setting, active_cycle, mark_stale_running_cycles, add_feedback, repair_rejection_integrity
+from db import init_db, query, one, execute, today_spend, get_setting, get_int_setting, get_bool_setting, set_setting, active_cycle, mark_stale_running_cycles, add_feedback, repair_rejection_integrity, log_spend, now_iso
 from safety import system_health
 from pipeline import run_cycle
 from intelligence import analyze_reference_image
+from generator import render_design, visual_score
 import re
 
-st.set_page_config(page_title='Trend2Sketch Advanced Studio', page_icon='💎', layout='wide')
+st.set_page_config(page_title='Trend2Sketch DesignOS V4', page_icon='💎', layout='wide')
 init_db()
 repaired_rejections=repair_rejection_integrity()
 mark_stale_running_cycles(CYCLE_STALE_MINUTES)
@@ -15,7 +16,7 @@ mark_stale_running_cycles(CYCLE_STALE_MINUTES)
 if APP_PASSWORD:
     if 'auth' not in st.session_state: st.session_state.auth=False
     if not st.session_state.auth:
-        st.title('Trend2Sketch Advanced Studio')
+        st.title('Trend2Sketch DesignOS V4')
         pwd=st.text_input('Password',type='password')
         if st.button('Open Studio') and pwd==APP_PASSWORD:
             st.session_state.auth=True; st.rerun()
@@ -23,8 +24,8 @@ if APP_PASSWORD:
 
 # Persistent controls — saved in SQLite on the Render disk, so changing them does not require redeployment.
 quality_threshold = max(75, min(100, get_int_setting('quality_threshold', DISPLAY_THRESHOLD)))
-render_cap = max(1, min(100, get_int_setting('render_cap', MAX_RENDER_PER_CYCLE)))
-auto_enabled = get_bool_setting('auto_enabled', True)
+render_cap = max(1, min(3, get_int_setting('render_cap', MAX_RENDER_PER_CYCLE)))
+auto_enabled = get_bool_setting('auto_enabled', False)
 speed_mode = get_setting('speed_mode','Balanced') or 'Balanced'
 if speed_mode not in ('Fast','Balanced','Deep'): speed_mode='Balanced'
 try:
@@ -38,13 +39,14 @@ try:
 except Exception:
     selected_lanes=['Diamond','South Indian Gemstone']
 
-st.title('💎 Trend2Sketch Advanced Studio')
-st.caption('Product Intelligence • Design DNA → deep R&D → stone/weight engineering → novelty gate → CAD handoff → owner learning')
+st.title('💎 Trend2Sketch DesignOS V4')
+st.caption('Verified research → three discovery sketches → owner decision → optional refinement')
+st.warning('Controlled discovery mode: dimensions, stone sizes and weights are estimates until owner or production refinement. Background generation is OFF by default.')
 
 with st.expander('🎛️ Live Studio Controls — no redeployment needed', expanded=True):
     c1,c2,c3,c4=st.columns(4)
     new_threshold=c1.slider('Quality acceptance score',75,100,quality_threshold,help='Change this anytime. Designs at or above this final score become accepted in the library.')
-    new_cap=c2.slider('Number of designs to generate per cycle',1,100,render_cap,step=1,help='Choose the exact number of jewellery designs the system should attempt to generate in each cycle. Change this anytime without redeploying.')
+    new_cap=c2.slider('Discovery sketches per batch',1,3,render_cap,step=1,help='V4 hard-caps every paid discovery batch at three sketches.')
     new_auto=c3.toggle('Autonomous cycles enabled',value=auto_enabled,help='Turn background scheduled generation on/off without changing Render or GitHub.')
     new_speed=c4.selectbox('Worker speed', ['Fast','Balanced','Deep'], index=['Fast','Balanced','Deep'].index(speed_mode), help='Deep is now Design Director R&D mode: three research lenses, synthesis, a larger concept pool, CAD-actionable briefs and stricter product-development scoring.')
     changed = (new_threshold != quality_threshold) or (new_cap != render_cap) or (new_auto != auto_enabled) or (new_speed != speed_mode)
@@ -84,18 +86,8 @@ with st.expander('🎛️ Live Studio Controls — no redeployment needed', expa
     else:
         st.info('Category mode: AUTO-DISCOVER — the research engine may choose any promising jewellery product category.')
 
-    preset_cols=st.columns(3)
-    if preset_cols[0].button('🧪 Trial preset: 75 / 10'):
-        set_setting('quality_threshold',75); set_setting('render_cap',10); set_setting('auto_enabled','1')
-        execute("""UPDATE designs SET visible=CASE WHEN final_score>=75 AND COALESCE(status,'')<>'owner_rejected' AND NOT EXISTS (SELECT 1 FROM design_feedback f WHERE f.design_id=designs.id AND lower(trim(f.verdict))='reject') THEN 1 ELSE 0 END WHERE final_score IS NOT NULL""")
-        st.rerun()
-    if preset_cols[1].button('⚖️ Review preset: 85 / 30'):
-        set_setting('quality_threshold',85); set_setting('render_cap',30); set_setting('auto_enabled','1')
-        execute("""UPDATE designs SET visible=CASE WHEN final_score>=85 AND COALESCE(status,'')<>'owner_rejected' AND NOT EXISTS (SELECT 1 FROM design_feedback f WHERE f.design_id=designs.id AND lower(trim(f.verdict))='reject') THEN 1 ELSE 0 END WHERE final_score IS NOT NULL""")
-        st.rerun()
-    if preset_cols[2].button('🏆 Production preset: 95 / 100'):
-        set_setting('quality_threshold',95); set_setting('render_cap',100); set_setting('auto_enabled','1')
-        execute("""UPDATE designs SET visible=CASE WHEN final_score>=95 AND COALESCE(status,'')<>'owner_rejected' AND NOT EXISTS (SELECT 1 FROM design_feedback f WHERE f.design_id=designs.id AND lower(trim(f.verdict))='reject') THEN 1 ELSE 0 END WHERE final_score IS NOT NULL""")
+    if st.button('🛡️ Reset to controlled mode'):
+        set_setting('quality_threshold',75); set_setting('render_cap',3); set_setting('auto_enabled','0'); set_setting('speed_mode','Balanced')
         st.rerun()
 
 # Product Intelligence controls — persistent, no redeployment needed.
@@ -193,7 +185,7 @@ if active:
             st.progress(0.0, text='🎨 Rendering started…')
             st.caption(note or 'Waiting for first rendered design.')
 
-if st.button('Generate one trial cycle now', type='primary', disabled=bool(active)):
+if st.button('Research and generate up to 3 discovery sketches', type='primary', disabled=bool(active)):
     with st.spinner('Running one protected cycle. Automatic retries and single-cycle lock are active...'):
         cid=run_cycle(manual=True)
     if cid:
@@ -214,7 +206,7 @@ params=[review_floor]; where="final_score>=? AND image_path IS NOT NULL AND COAL
 if lane!='All': where+=' AND lane=?'; params.append(lane)
 rows=query(f'SELECT * FROM designs WHERE {where} ORDER BY final_score DESC, id DESC LIMIT ?',tuple(params+[int(limit)]))
 if not rows:
-    st.info('No rendered designs are available at this review score yet. For first testing, use the Trial preset (75 / 10) and run one trial cycle.')
+    st.info('No discovery sketches are available at this review score. Run one controlled research batch above.')
 else:
     for i in range(0,len(rows),3):
         cs=st.columns(3)
@@ -229,11 +221,11 @@ else:
                 st.write(r.get('description',''))
                 st.caption(f"Concept score {float(r.get('pre_score') or 0):.0f} • Visual score {float(r.get('visual_score') or 0):.0f}")
                 if r.get('cad_brief'):
-                    with st.expander('📐 CAD handoff sheet'):
+                    with st.expander('📐 Discovery specification and sources'):
                         try: brief=json.loads(r.get('cad_brief') or '{}')
                         except Exception: brief={}
                         st.write(f"**Target weight:** {r.get('target_weight') or '—'}")
-                        for label,key in [('Dimensions','dimensions'),('Stone hierarchy','stone_hierarchy'),('Stone shapes / sizes','stone_shapes_sizes'),('Setting strategy','setting_strategy'),('Construction','construction'),('Articulation','articulation'),('Comfort','comfort_notes'),('Lightweighting','lightweighting_strategy'),('Manufacturability','manufacturability_rationale')]:
+                        for label,key in [('Estimated dimensions','dimensions'),('Stone hierarchy','stone_hierarchy'),('Estimated stone shapes / sizes','stone_shapes_sizes'),('Setting strategy','setting_strategy'),('Construction','construction'),('Articulation','articulation'),('Comfort','comfort_notes'),('Lightweighting','lightweighting_strategy'),('Manufacturability','manufacturability_rationale'),('Research sources','source_urls'),('Estimate warning','estimate_warning')]:
                             if brief.get(key): st.write(f"**{label}:** {brief.get(key)}")
 
                 fb1,fb2,fb3=st.columns(3)
@@ -248,6 +240,28 @@ else:
                     note=st.text_input('Optional note',key=f"note{r['id']}")
                     if st.button('Save rejection',key=f"save_reject{r['id']}"):
                         add_feedback(r['id'],'reject',reason,note); st.session_state[f"reject_open_{r['id']}"]=False; st.toast('Rejected permanently: removed from every visible library, retained only for negative learning.'); st.rerun()
+                with st.expander('✏️ Refine this selected direction'):
+                    revision=st.text_area('What should change?',key=f"revision{r['id']}",placeholder='Example: reduce centre size, increase emerald dominance, simplify side links')
+                    if st.button('Generate one refinement',key=f"refine{r['id']}",disabled=not revision.strip()):
+                        if today_spend()+EST_IMAGE_COST_USD>=DAILY_API_BUDGET_USD:
+                            st.error('Daily cost guard reached. No refinement was generated.')
+                        else:
+                            try:
+                                try: brief=json.loads(r.get('cad_brief') or '{}')
+                                except Exception: brief={}
+                                concept=dict(r); concept.update(brief)
+                                path=render_design(concept,0,r['id'],revision.strip())
+                                vscore,vreason,redesign=visual_score(concept,path)
+                                fp=hashlib.sha256(f"refine:{r['id']}:{revision}:{now_iso()}".encode()).hexdigest()[:32]
+                                title=(r.get('title') or 'Design')+' — refinement'
+                                execute('''INSERT INTO designs(cycle_id,created_at,lane,category,concept_family,title,description,materials,target_weight,region_signal,rationale,pre_score,visual_score,final_score,image_path,visible,fingerprint,status,error,cad_brief) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
+                                    None,now_iso(),r.get('lane'),r.get('category'),r.get('concept_family'),title,r.get('description'),r.get('materials'),r.get('target_weight'),r.get('region_signal'),'Owner-directed refinement | Visual: '+vreason,r.get('pre_score'),vscore,vscore,path,1,fp,'refinement',redesign,json.dumps(brief,ensure_ascii=False)))
+                                log_spend(None,'image_refinement',EST_IMAGE_COST_USD,'configured estimate')
+                                add_feedback(r['id'],'refine','Owner requested refinement',revision.strip())
+                                st.success('One refinement created. No further batch was started.')
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f'Refinement failed safely: {type(e).__name__}: {e}')
 
 st.subheader('Score Calibration Lab')
 st.caption('Use this to compare 75–100 rated output side by side before deciding your permanent production threshold. Changing the Review floor costs nothing and requires no regeneration.')
@@ -266,4 +280,4 @@ st.subheader('Recent autonomous cycles')
 cycles=query('SELECT id,started_at,status,stage,concepts_discovered,candidates_scored,rendered,visible,rejected,failed,estimated_cost_usd,note FROM cycles ORDER BY id DESC LIMIT 12')
 st.dataframe(cycles,width='stretch',hide_index=True)
 
-st.caption('Foolproof Design OS: Design DNA image learning + multi-agent Deep R&D + CAD-actionable briefs + owner feedback + crash recovery. Scores are internal design-intelligence scores, not guaranteed sales probabilities. Public trend research is used for inspiration; branded products must not be copied.')
+st.caption('DesignOS V4: verified-source research + controlled discovery sketches + owner feedback + crash recovery. Scores are internal review aids, not sales or manufacturing guarantees. Public research is used for inspiration; branded products must not be copied.')

@@ -1,4 +1,7 @@
-# Trend2Sketch Studio
+# Trend2Sketch DesignOS V4 — Controlled Research Edition
+
+> Start with `README_V4_CONTROLLED.md`. V4 is manual-first, requires auditable
+> live research, and hard-caps discovery at three sketches per batch.
 
 A next-generation autonomous jewellery concept platform focused on dynamic concept discovery rather than a fixed category matrix.
 

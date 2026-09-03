@@ -22,15 +22,15 @@ services:
       - key: OPENAI_IMAGE_MODEL
         value: gpt-image-2
       - key: OPENAI_IMAGE_QUALITY
-        value: low
+        value: medium
       - key: AUTO_INTERVAL_MINUTES
-        value: '30'
+        value: '1440'
       - key: AUTO_RUN_ON_START
-        value: 'true'
+        value: 'false'
       - key: CONCEPT_POOL_SIZE
-        value: '300'
+        value: '12'
       - key: MAX_RENDER_PER_CYCLE
-        value: '100'
+        value: '3'
       - key: PRE_RENDER_MIN_SCORE
         value: '70'
       - key: DISPLAY_THRESHOLD
@@ -38,7 +38,7 @@ services:
       - key: GENERATION_CONCURRENCY
         value: '3'
       - key: DAILY_API_BUDGET_USD
-        value: '10'
+        value: '2'
       - key: EST_IMAGE_COST_USD
         value: '0.03'
       - key: RETENTION_DAYS

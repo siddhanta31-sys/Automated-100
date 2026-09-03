@@ -9,13 +9,14 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 TEXT_MODEL = os.getenv('OPENAI_TEXT_MODEL', 'gpt-5.6-luna')
 VISION_MODEL = os.getenv('OPENAI_VISION_MODEL', TEXT_MODEL)
 IMAGE_MODEL = os.getenv('OPENAI_IMAGE_MODEL', 'gpt-image-2')
-IMAGE_QUALITY = os.getenv('OPENAI_IMAGE_QUALITY', 'low')
+IMAGE_QUALITY = os.getenv('OPENAI_IMAGE_QUALITY', 'medium')
 IMAGE_SIZE = os.getenv('OPENAI_IMAGE_SIZE', '1024x1024')
 
-AUTO_INTERVAL_MINUTES = int(os.getenv('AUTO_INTERVAL_MINUTES', '30'))
-AUTO_RUN_ON_START = os.getenv('AUTO_RUN_ON_START', 'true').lower() == 'true'
-CONCEPT_POOL_SIZE = int(os.getenv('CONCEPT_POOL_SIZE', '300'))
-MAX_RENDER_PER_CYCLE = int(os.getenv('MAX_RENDER_PER_CYCLE', '100'))
+AUTO_INTERVAL_MINUTES = int(os.getenv('AUTO_INTERVAL_MINUTES', '1440'))
+# V4 is manual-first. Automation can only run after the owner explicitly enables it.
+AUTO_RUN_ON_START = os.getenv('AUTO_RUN_ON_START', 'false').lower() == 'true'
+CONCEPT_POOL_SIZE = int(os.getenv('CONCEPT_POOL_SIZE', '12'))
+MAX_RENDER_PER_CYCLE = int(os.getenv('MAX_RENDER_PER_CYCLE', '3'))
 DISPLAY_THRESHOLD = int(os.getenv('DISPLAY_THRESHOLD', '95'))
 PRE_RENDER_MIN_SCORE = float(os.getenv('PRE_RENDER_MIN_SCORE', '70'))
 FINAL_PRE_WEIGHT = float(os.getenv('FINAL_PRE_WEIGHT', '0.20'))
@@ -29,7 +30,7 @@ CONCEPT_BATCH_SIZE = int(os.getenv('CONCEPT_BATCH_SIZE', '40'))
 CONCEPT_MAX_BATCHES = int(os.getenv('CONCEPT_MAX_BATCHES', '15'))
 RENDER_RETRIES = int(os.getenv('RENDER_RETRIES', '2'))
 
-DAILY_API_BUDGET_USD = float(os.getenv('DAILY_API_BUDGET_USD', '10'))
+DAILY_API_BUDGET_USD = float(os.getenv('DAILY_API_BUDGET_USD', '2'))
 EST_IMAGE_COST_USD = float(os.getenv('EST_IMAGE_COST_USD', '0.03'))
 EST_TEXT_CYCLE_COST_USD = float(os.getenv('EST_TEXT_CYCLE_COST_USD', '0.08'))
 MIN_FREE_DISK_GB = float(os.getenv('MIN_FREE_DISK_GB', '1.5'))
@@ -44,6 +45,11 @@ RESEARCH_DOMAINS = [
     'malabargoldanddiamonds.com',
     'kalyanjewellers.net',
     'joyalukkas.in',
+    'grtjewels.com',
+    'vbjewellers.com',
+    'nacjewellers.com',
+    'pmjewels.com',
+    'gia.edu',
 ]
 
 

@@ -55,13 +55,15 @@ Current product engineering constraints: {constraints}
 The goal is commercially developable concepts that a jewellery design/CAD team can use, not merely attractive AI imagery."""
     if not deep:
         prompt=base+"""
-Return concise JSON with keys: trends, discovered_families, opportunities, manufacturing_signals, avoid_copying_note."""
-        try:
-            _log(f'research request model={TEXT_MODEL}, web_search=on')
-            return _retry('web research',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,tools=[{'type':'web_search'}],input=prompt))))
-        except Exception as e:
-            _log(f'web research exhausted retries: {type(e).__name__}: {e}; using non-web fallback')
-            return _retry('research fallback',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,input=prompt+'\nIf live search is unavailable, label limitations.'))))
+Live research is mandatory. Return ONLY JSON with keys: research_status, researched_at,
+sources, trends, discovered_families, opportunities, manufacturing_signals,
+stone_signals, uncertainty_notes, avoid_copying_note.
+sources must contain at least 3 items with title, url, domain, observed_signal and
+published_or_accessed_date. Never invent a URL. Mark dimensions, weights and stone
+sizes as estimates unless a source explicitly supplies them."""
+        _log(f'research request model={TEXT_MODEL}, web_search=required')
+        result=_retry('web research',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,tools=[{'type':'web_search'}],input=prompt))))
+        return _validate_research(result)
 
     lenses=[
       'South Indian heritage/regional concept taxonomy and credible contemporary hybrids',
@@ -70,8 +72,12 @@ Return concise JSON with keys: trends, discovered_families, opportunities, manuf
     ]
     def agent(i,lens):
         prompt=base+f"""
-DEEP RESEARCH LENS {i}: {lens}. Use web search broadly. Return JSON with evidence_signals, families, subfamilies, opportunities, construction_rules, stone_rules, avoid_patterns, white_space_opportunities."""
-        return _retry(f'deep research agent {i}',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,tools=[{'type':'web_search'}],input=prompt))))
+DEEP RESEARCH LENS {i}: {lens}. Use web search broadly. Return JSON with sources,
+evidence_signals, families, subfamilies, opportunities, construction_rules,
+stone_rules, avoid_patterns, white_space_opportunities. Every source item must
+include a real title, exact URL, domain, observed signal and accessed date."""
+        report=_retry(f'deep research agent {i}',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,tools=[{'type':'web_search'}],input=prompt))))
+        return report
     reports=[]
     with ThreadPoolExecutor(max_workers=3) as ex:
         futs=[ex.submit(agent,i+1,l) for i,l in enumerate(lenses)]
@@ -83,7 +89,26 @@ DEEP RESEARCH LENS {i}: {lens}. Use web search broadly. Return JSON with evidenc
     synthesis=f"""Act as Chief Jewellery Product Director. Synthesize these independent research reports into an R&D map.
 {json.dumps(reports,ensure_ascii=False)[:30000]}
 Return ONLY JSON with: trends, discovered_families, subfamilies, opportunities, manufacturing_rules, stone_architecture_rules, regional_grammar, lightweighting_rules, avoid_patterns, concept_seeds, research_depth_note. concept_seeds must be specific product-development directions, not generic adjectives. Never recommend copying a branded SKU."""
-    return _retry('deep research synthesis',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,input=synthesis))))
+    synthesis += "\nInclude the union of verified source objects under sources and uncertainty_notes."
+    result=_retry('deep research synthesis',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,input=synthesis))))
+    return _validate_research(result)
+
+def _validate_research(result):
+    """Fail closed: a design cycle cannot claim research without auditable URLs."""
+    if not isinstance(result,dict):
+        raise ValueError('Research output was not a JSON object')
+    sources=result.get('sources') or []
+    valid=[]
+    for source in sources:
+        if not isinstance(source,dict): continue
+        url=str(source.get('url') or '').strip()
+        if url.startswith(('https://','http://')) and source.get('title'):
+            valid.append(source)
+    if len(valid)<3:
+        raise RuntimeError('Live research did not return at least 3 verifiable sources; no sketches were generated or charged.')
+    result['sources']=valid
+    result['research_status']='verified_live_web'
+    return result
 
 
 def analyze_reference_image(path, note='', profile_name='General'):
@@ -114,10 +139,10 @@ def _normalize_choice(value,allowed):
 def _concept_batch(research,need,batch_no,selected_categories,selected_lanes):
     cats=('The category field MUST be exactly one of: '+json.dumps(selected_categories)+'.') if selected_categories else 'Choose category dynamically from the research.'
     lanes='The lane field MUST be exactly one of: '+json.dumps(selected_lanes)+'.'
-    prompt=f'''You are an expert jewellery creative director. Based on this research JSON:\n{json.dumps(research)[:12000]}
+    prompt=f'''You are an expert jewellery creative director. Based on this research JSON:\n{json.dumps(research)[:18000]}
 Create exactly {need} ORIGINAL jewellery design concepts. This is parallel creative batch {batch_no}; deliberately explore different architectures and motifs from other batches.
 {cats}\n{lanes}
-Spread the batch across allowed categories and lanes. Do not recreate a known branded SKU. Every concept must be a CAD-actionable PRODUCT BRIEF, not a vague visual idea. Specify a distinct architecture and credible construction. Avoid generic 'floral luxury necklace' language.\nReturn ONLY a JSON array. Each item: lane, category, concept_family, title, description, materials, target_weight, region_signal, dimensions, stone_hierarchy, stone_shapes_sizes, setting_strategy, construction, articulation, comfort_notes, lightweighting_strategy, commercial_rationale, originality_rationale, manufacturability_rationale.'''
+Spread the batch across allowed categories and lanes. Do not recreate a known branded SKU. Create a DISCOVERY SKETCH BRIEF, not CAD. Use dimensions/weight/stone sizes only as clearly labelled estimates. Every item must include source_urls (2-4 URLs copied exactly from the research sources) and estimate_warning. Avoid generic 'floral luxury necklace' language.\nReturn ONLY a JSON array. Each item: lane, category, concept_family, title, description, materials, target_weight, region_signal, dimensions, stone_hierarchy, stone_shapes_sizes, setting_strategy, construction, articulation, comfort_notes, lightweighting_strategy, commercial_rationale, originality_rationale, manufacturability_rationale, source_urls, estimate_warning.'''
     items=_retry(f'concept batch {batch_no}',lambda:_json_from_text(_text(client.responses.create(model=TEXT_MODEL,input=prompt))), retries=2)
     if isinstance(items,dict): items=items.get('concepts',[])
     if not isinstance(items,list): return []

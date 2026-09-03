@@ -72,7 +72,8 @@ def run_cycle(manual=False):
             _log('autonomous generation is paused by Live Studio Controls',None,'automation_paused'); return None
         cycle_id=create_cycle()
         quality_threshold=max(75,min(100,get_int_setting('quality_threshold',DISPLAY_THRESHOLD)))
-        render_cap=max(1,min(100,get_int_setting('render_cap',MAX_RENDER_PER_CYCLE)))
+        # Discovery is intentionally capped at three sketches to protect budget and force review.
+        render_cap=max(1,min(3,get_int_setting('render_cap',MAX_RENDER_PER_CYCLE)))
         speed_mode=get_setting('speed_mode','Balanced') or 'Balanced'; profile=_speed_profile(speed_mode,render_cap)
         try:
             selected_categories=json.loads(get_setting('selected_categories','[]') or '[]')
@@ -100,7 +101,7 @@ def run_cycle(manual=False):
             else:
                 _log(f'calling text model {TEXT_MODEL} with automatic retry/fallback',cycle_id,stage)
                 research=research_market(selected_categories=selected_categories, selected_lanes=selected_lanes, deep=(profile['mode']=='Deep'), feedback=feedback_summary(), references=reference_summary(), product_constraints={"target_weight":get_setting("target_weight_range","Auto"), "stone_strategy":get_setting("stone_strategy","Auto"), "commercial_market":get_setting("commercial_market","South India retail"), "novelty_gate":get_int_setting("novelty_gate",72)})
-                meta=json.dumps({'categories':selected_categories,'lanes':selected_lanes,'live_web':True})
+                meta=json.dumps({'categories':selected_categories,'lanes':selected_lanes,'research_status':research.get('research_status'),'sources':research.get('sources',[])})
                 execute('INSERT INTO research_snapshots(created_at,summary,source_note) VALUES(?,?,?)',(now_iso(),json.dumps(research),meta)); save_checkpoint(cycle_id,'research',research)
                 log_spend(cycle_id,'research_and_concepts',EST_TEXT_CYCLE_COST_USD,'configured estimate')
 
@@ -151,7 +152,7 @@ def run_cycle(manual=False):
                         c,path,vscore,vreason,redesign,final=fut.result(); rendered+=1; vis=1 if final>=quality_threshold else 0
                         if vis: visible+=1
                         else: rejected+=1
-                        cad_brief=json.dumps({k:c.get(k) for k in ('dimensions','stone_hierarchy','stone_shapes_sizes','setting_strategy','construction','articulation','comfort_notes','lightweighting_strategy','commercial_rationale','originality_rationale','manufacturability_rationale')},ensure_ascii=False)
+                        cad_brief=json.dumps({k:c.get(k) for k in ('dimensions','stone_hierarchy','stone_shapes_sizes','setting_strategy','construction','articulation','comfort_notes','lightweighting_strategy','commercial_rationale','originality_rationale','manufacturability_rationale','source_urls','estimate_warning')},ensure_ascii=False)
                         execute('''INSERT OR IGNORE INTO designs(cycle_id,created_at,lane,category,concept_family,title,description,materials,target_weight,region_signal,rationale,pre_score,visual_score,final_score,image_path,visible,fingerprint,status,error,cad_brief) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
                             cycle_id,now_iso(),c.get('lane'),c.get('category'),c.get('concept_family'),c.get('title'),c.get('description'),c.get('materials'),c.get('target_weight'),c.get('region_signal'),(c.get('score_reason','')+' | Visual: '+vreason),c.get('pre_score'),vscore,final,path,vis,fingerprint(c),'visible' if vis else 'rejected',redesign if not vis else None,cad_brief))
                         log_spend(cycle_id,'image',EST_IMAGE_COST_USD,'configured estimate')

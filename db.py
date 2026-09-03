@@ -104,6 +104,16 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_designs_created ON designs(created_at DESC);
     ''')
     c.commit()
+    # One-time V4 safety migration. Existing V3 deployments may have persisted
+    # automation=ON and render_cap=100; neutralise those settings before either
+    # the web app or worker can start a paid cycle.
+    migrated=c.execute("SELECT value FROM app_settings WHERE key='v4_controlled_migration'").fetchone()
+    if not migrated:
+        ts=now_iso()
+        c.execute("INSERT INTO app_settings(key,value,updated_at) VALUES('auto_enabled','0',?) ON CONFLICT(key) DO UPDATE SET value='0',updated_at=excluded.updated_at",(ts,))
+        c.execute("INSERT INTO app_settings(key,value,updated_at) VALUES('render_cap','3',?) ON CONFLICT(key) DO UPDATE SET value='3',updated_at=excluded.updated_at",(ts,))
+        c.execute("INSERT INTO app_settings(key,value,updated_at) VALUES('v4_controlled_migration','1',?)",(ts,))
+        c.commit()
     # Forward-compatible migrations.
     for sql in [
         'ALTER TABLE cycles ADD COLUMN heartbeat_at TEXT',
