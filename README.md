@@ -24,7 +24,7 @@ This package generates design concepts/images; it does not yet create production
 ## Render deployment
 1. Create a new private GitHub repo or branch and upload all files to the repo root.
 2. Create a Render Blueprint from `render.yaml`.
-3. Set `APP_PASSWORD` and `OPENAI_API_KEY` in Render; never commit API keys.
+3. Set `APP_PASSWORD` and `OPENAI_API_KEY` in Render; never commit API keys. The deployment defaults to `gpt-5.6-terra` for text reasoning and vision evaluation.
 4. Deploy.
 5. After deployment, optionally set `APP_PUBLIC_URL` to the Render URL.
 

@@ -6,7 +6,7 @@ DB_PATH = os.path.join(DATA_DIR, 'studio.db')
 IMAGE_DIR = os.path.join(DATA_DIR, 'designs')
 
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
-TEXT_MODEL = os.getenv('OPENAI_TEXT_MODEL', 'gpt-5.6-luna')
+TEXT_MODEL = os.getenv('OPENAI_TEXT_MODEL', 'gpt-5.6-terra')
 VISION_MODEL = os.getenv('OPENAI_VISION_MODEL', TEXT_MODEL)
 IMAGE_MODEL = os.getenv('OPENAI_IMAGE_MODEL', 'gpt-image-2')
 IMAGE_QUALITY = os.getenv('OPENAI_IMAGE_QUALITY', 'medium')
